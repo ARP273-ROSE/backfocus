@@ -1,0 +1,26 @@
+# Runtime user data (regenerated from reference_data.py on first launch)
+backfocus_data.json
+
+# Virtual environment (platform-specific, recreated by launcher)
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Pytest cache
+.pytest_cache/
+
+# LaTeX source and build artifacts
+manual/*.tex
+manual/*.aux
+manual/*.log
+manual/*.out
+manual/*.toc
+
+# Personal files
+*.xlsx
+
+# Windows temp artifacts
+NDH6SA~M

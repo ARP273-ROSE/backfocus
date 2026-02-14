@@ -1,0 +1,3 @@
+# Backfocus Calculator
+# No external dependencies required - uses Python's built-in tkinter
+# Python 3.8+ required
