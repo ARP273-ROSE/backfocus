@@ -12,6 +12,7 @@ Supported formats: FITS (.fits .fit .fts), compressed FITS (.fits.fz .fit.fz),
 Requires: numpy, scipy, astropy, photutils, matplotlib
 """
 
+import concurrent.futures
 import math
 import os
 import struct
@@ -46,6 +47,8 @@ TR_FITS = {
     "loading":          {"en": "Loading image…", "fr": "Chargement image…"},
     "detecting":        {"en": "Detecting stars…", "fr": "Détection des étoiles…"},
     "fitting":          {"en": "Fitting PSFs ({n}/{total})…", "fr": "Ajustement PSF ({n}/{total})…"},
+    "fitting_parallel": {"en": "Fitting PSFs ({n}/{total}) [{workers} threads]…",
+                         "fr": "Ajustement PSF ({n}/{total}) [{workers} threads]…"},
     "building_map":     {"en": "Building FWHM map…", "fr": "Construction carte FWHM…"},
     "classifying":      {"en": "Classifying backfocus…", "fr": "Classification backfocus…"},
     "done":             {"en": "Done.", "fr": "Terminé."},
@@ -161,10 +164,31 @@ def _is_xisf(filepath):
         return False
 
 
+def _byte_unshuffle(data_bytes, item_size):
+    """Reverse XISF byte-shuffling.
+
+    Byte-shuffling groups bytes by significance before compression:
+      shuffled[i*N + j] = byte i of element j  (i=0..item_size-1, j=0..N-1)
+    Unshuffling restores original interleaved element order.
+    """
+    n_bytes = len(data_bytes)
+    if item_size <= 1 or n_bytes < item_size:
+        return data_bytes
+    n_elements = n_bytes // item_size
+    usable = n_elements * item_size
+    arr = np.frombuffer(data_bytes[:usable], dtype=np.uint8)
+    # Reshape as (item_size, n_elements) then transpose to (n_elements, item_size)
+    unshuffled = arr.reshape(item_size, n_elements).T.tobytes()
+    if usable < n_bytes:
+        unshuffled += data_bytes[usable:]
+    return unshuffled
+
+
 def _load_xisf(filepath):
     """Load an XISF file, return (2D float64 array, dict header).
 
-    Supports attached data blocks with optional zlib compression.
+    Supports attached data blocks with zlib/lz4/zstd compression
+    and byte-shuffling (+sh).
     """
     with open(filepath, "rb") as f:
         magic = f.read(8)
@@ -232,21 +256,27 @@ def _load_xisf(filepath):
         else:
             raise ValueError(f"Unsupported XISF location: {location}")
 
-        # Decompress if needed
+        # Decompress if needed (supports byte-shuffling: codec+sh)
         if compression:
-            codec = compression.split(":")[0].lower()
-            if "+sh" in codec:
-                raise ValueError(f"XISF byte-shuffled compression ({codec}) not supported")
-            if codec == "zlib":
+            comp_parts = compression.split(":")
+            codec = comp_parts[0].lower()
+            uncompressed_size = int(comp_parts[1]) if len(comp_parts) > 1 else 0
+            # Item size for byte-shuffling: from attribute or from dtype
+            shuffle_item_size = (int(comp_parts[2]) if len(comp_parts) > 2
+                                 else np.dtype(dtype).itemsize)
+
+            byte_shuffle = "+sh" in codec
+            base_codec = codec.replace("+sh", "")
+
+            if base_codec == "zlib":
                 raw = zlib.decompress(raw)
-            elif codec in ("lz4", "lz4hc"):
+            elif base_codec in ("lz4", "lz4hc"):
                 try:
                     import lz4.block
-                    uncompressed_size = int(compression.split(":")[1]) if ":" in compression else 0
                     raw = lz4.block.decompress(raw, uncompressed_size=uncompressed_size)
                 except ImportError:
                     raise ValueError("XISF LZ4 compression: pip install lz4")
-            elif codec == "zstd":
+            elif base_codec == "zstd":
                 try:
                     import zstandard
                     raw = zstandard.ZstdDecompressor().decompress(raw)
@@ -254,6 +284,9 @@ def _load_xisf(filepath):
                     raise ValueError("XISF Zstandard compression: pip install zstandard")
             else:
                 raise ValueError(f"Unsupported XISF compression: {codec}")
+
+            if byte_shuffle:
+                raw = _byte_unshuffle(raw, shuffle_item_size)
 
         data = np.frombuffer(raw, dtype=dtype)
 
@@ -427,107 +460,154 @@ def _gaussian_2d(xy, amplitude, x0, y0, sigma_x, sigma_y, theta, offset):
     return (amplitude * np.exp(-(a * dx**2 + 2 * b * dx * dy + c * dy**2)) + offset).ravel()
 
 
+def _fit_one_star(args):
+    """Fit a single star PSF. Called from fit_star_psfs (sequential or parallel).
+
+    Returns result dict or None if fitting fails or quality check rejects.
+    """
+    star, cutout, x0, y0, box_size, half, xy = args
+
+    bg = np.median(np.concatenate([
+        cutout[0, :], cutout[-1, :], cutout[:, 0], cutout[:, -1]
+    ]))
+    cutout_sub = cutout - bg
+
+    amp_guess = cutout_sub.max()
+    if amp_guess <= 0:
+        return None
+
+    cx_local = star["x"] - x0
+    cy_local = star["y"] - y0
+    sig_guess = ANALYSIS_DEFAULTS["fwhm_est"] / 2.355
+
+    p0 = [amp_guess, cx_local, cy_local, sig_guess, sig_guess, 0.0, 0.0]
+    bounds_lo = [0, cx_local - half / 2, cy_local - half / 2, 0.5, 0.5, -math.pi, -np.inf]
+    bounds_hi = [amp_guess * 3, cx_local + half / 2, cy_local + half / 2,
+                 half, half, math.pi, amp_guess]
+
+    try:
+        popt, _ = curve_fit(_gaussian_2d, xy, cutout_sub.ravel(),
+                            p0=p0, bounds=(bounds_lo, bounds_hi),
+                            maxfev=2000)
+    except (RuntimeError, ValueError):
+        return None
+
+    amp, fit_cx, fit_cy, sigma_x, sigma_y, theta, offset = popt
+
+    fwhm_x = abs(sigma_x) * 2.355
+    fwhm_y = abs(sigma_y) * 2.355
+    fwhm_major = max(fwhm_x, fwhm_y)
+    fwhm_minor = min(fwhm_x, fwhm_y)
+
+    if fwhm_major < 0.5:
+        return None
+
+    eccentricity = math.sqrt(1 - (fwhm_minor / fwhm_major) ** 2)
+
+    if fwhm_x >= fwhm_y:
+        pa = theta
+    else:
+        pa = theta + math.pi / 2
+    pa = ((pa + math.pi / 2) % math.pi) - math.pi / 2
+
+    model = _gaussian_2d(xy, *popt)
+    residuals = cutout_sub.ravel() - model
+    chi2 = np.sum(residuals ** 2) / (amp_guess ** 2 + 1e-10) * box_size
+
+    if chi2 > ANALYSIS_DEFAULTS["max_chi2"]:
+        return None
+    if eccentricity > ANALYSIS_DEFAULTS["max_eccentricity"]:
+        return None
+    if fwhm_major > box_size / 2:
+        return None
+
+    return {
+        "x": star["x"],
+        "y": star["y"],
+        "x_fit": fit_cx + x0,
+        "y_fit": fit_cy + y0,
+        "fwhm_major": fwhm_major,
+        "fwhm_minor": fwhm_minor,
+        "fwhm_geom": math.sqrt(fwhm_major * fwhm_minor),
+        "eccentricity": eccentricity,
+        "position_angle": pa,
+        "amplitude": amp,
+        "chi2": chi2,
+        "flux": star["flux"],
+    }
+
+
 def fit_star_psfs(data, stars, box_size=None, progress_cb=None):
-    """Fit elliptical 2D Gaussian to each star. Returns list of result dicts."""
+    """Fit elliptical 2D Gaussian to each star. Returns list of result dicts.
+
+    Uses parallel threads (scipy curve_fit releases the GIL) scaled to
+    the number of CPU cores available on the machine.
+    """
     if box_size is None:
         box_size = ANALYSIS_DEFAULTS["box_size"]
 
     half = box_size // 2
     h, w = data.shape
-    results = []
     interval = ANALYSIS_DEFAULTS["progress_interval"]
 
+    # Precompute coordinate grid (shared read-only across threads)
     y_grid, x_grid = np.mgrid[0:box_size, 0:box_size]
     xy = (x_grid.ravel(), y_grid.ravel())
 
-    for i, star in enumerate(stars):
+    # Build task list with pre-extracted cutouts
+    tasks = []
+    for star in stars:
         sx, sy = int(round(star["x"])), int(round(star["y"]))
         x0 = sx - half
         y0 = sy - half
-
         if x0 < 0 or y0 < 0 or x0 + box_size > w or y0 + box_size > h:
             continue
-
         cutout = data[y0:y0 + box_size, x0:x0 + box_size].copy()
-        bg = np.median(np.concatenate([
-            cutout[0, :], cutout[-1, :], cutout[:, 0], cutout[:, -1]
-        ]))
-        cutout_sub = cutout - bg
+        tasks.append((star, cutout, x0, y0, box_size, half, xy))
 
-        amp_guess = cutout_sub.max()
-        if amp_guess <= 0:
-            continue
+    if not tasks:
+        return []
 
-        cx_local = star["x"] - x0
-        cy_local = star["y"] - y0
-        sig_guess = ANALYSIS_DEFAULTS["fwhm_est"] / 2.355
+    n_workers = max(1, min(os.cpu_count() or 4, len(tasks), 16))
 
-        p0 = [amp_guess, cx_local, cy_local, sig_guess, sig_guess, 0.0, 0.0]
-        bounds_lo = [0, cx_local - half/2, cy_local - half/2, 0.5, 0.5, -math.pi, -np.inf]
-        bounds_hi = [amp_guess * 3, cx_local + half/2, cy_local + half/2,
-                     half, half, math.pi, amp_guess]
+    # Sequential path for small workloads or single core
+    if n_workers <= 1 or len(tasks) < 20:
+        results = []
+        for i, task_args in enumerate(tasks):
+            result = _fit_one_star(task_args)
+            if result is not None:
+                results.append(result)
+            if progress_cb and (i + 1) % interval == 0:
+                progress_cb(i + 1, len(tasks))
+        if progress_cb:
+            progress_cb(len(tasks), len(tasks))
+        return results
 
-        try:
-            popt, pcov = curve_fit(_gaussian_2d, xy, cutout_sub.ravel(),
-                                   p0=p0, bounds=(bounds_lo, bounds_hi),
-                                   maxfev=2000)
-        except (RuntimeError, ValueError):
-            continue
+    # Parallel path — ThreadPoolExecutor works because scipy releases the GIL
+    results = []
+    completed = [0]  # mutable counter for thread-safe increment
+    lock = threading.Lock()
 
-        amp, fit_cx, fit_cy, sigma_x, sigma_y, theta, offset = popt
+    def _done_callback(future):
+        with lock:
+            completed[0] += 1
+            r = future.result()
+            if r is not None:
+                results.append(r)
+            if progress_cb and completed[0] % interval == 0:
+                progress_cb(completed[0], len(tasks))
 
-        # Compute FWHM and eccentricity
-        fwhm_x = abs(sigma_x) * 2.355
-        fwhm_y = abs(sigma_y) * 2.355
-        fwhm_major = max(fwhm_x, fwhm_y)
-        fwhm_minor = min(fwhm_x, fwhm_y)
-
-        if fwhm_major < 0.5:
-            continue
-
-        eccentricity = math.sqrt(1 - (fwhm_minor / fwhm_major) ** 2)
-
-        # Position angle: angle of major axis
-        if fwhm_x >= fwhm_y:
-            pa = theta
-        else:
-            pa = theta + math.pi / 2
-        # Normalize to [-pi/2, pi/2]
-        pa = ((pa + math.pi / 2) % math.pi) - math.pi / 2
-
-        # Chi-squared estimate
-        model = _gaussian_2d(xy, *popt)
-        residuals = cutout_sub.ravel() - model
-        chi2 = np.sum(residuals**2) / (amp_guess**2 + 1e-10) * box_size
-
-        # Reject bad fits
-        if chi2 > ANALYSIS_DEFAULTS["max_chi2"]:
-            continue
-        if eccentricity > ANALYSIS_DEFAULTS["max_eccentricity"]:
-            continue
-        if fwhm_major > box_size / 2:
-            continue
-
-        results.append({
-            "x": star["x"],
-            "y": star["y"],
-            "x_fit": fit_cx + x0,
-            "y_fit": fit_cy + y0,
-            "fwhm_major": fwhm_major,
-            "fwhm_minor": fwhm_minor,
-            "fwhm_geom": math.sqrt(fwhm_major * fwhm_minor),
-            "eccentricity": eccentricity,
-            "position_angle": pa,
-            "amplitude": amp,
-            "chi2": chi2,
-            "flux": star["flux"],
-        })
-
-        if progress_cb and (i + 1) % interval == 0:
-            progress_cb(i + 1, len(stars))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = []
+        for args in tasks:
+            fut = executor.submit(_fit_one_star, args)
+            fut.add_done_callback(_done_callback)
+            futures.append(fut)
+        # Wait for all to complete
+        concurrent.futures.wait(futures)
 
     if progress_cb:
-        progress_cb(len(stars), len(stars))
+        progress_cb(len(tasks), len(tasks))
 
     return results
 
@@ -957,13 +1037,23 @@ class FITSAnalyzerWindow:
                 self._error = self.t("too_few_stars", n=len(stars))
                 return
 
-            # 3. Fit PSFs
+            # 3. Fit PSFs (parallel with thread count scaled to CPU cores)
+            n_workers = max(1, min(os.cpu_count() or 4, len(stars), 16))
+            use_parallel = n_workers > 1 and len(stars) >= 20
+            fit_msg_key = "fitting_parallel" if use_parallel else "fitting"
+
             def progress_cb(n, total):
                 pct = 20 + int(60 * n / max(total, 1))
-                self._status_text = self.t("fitting", n=n, total=total)
+                if use_parallel:
+                    self._status_text = self.t(fit_msg_key, n=n, total=total,
+                                               workers=n_workers)
+                else:
+                    self._status_text = self.t(fit_msg_key, n=n, total=total)
                 self._progress = (pct, 100)
 
-            self._status_text = self.t("fitting", n=0, total=len(stars))
+            self._status_text = self.t(fit_msg_key, n=0, total=len(stars),
+                                       workers=n_workers) if use_parallel else \
+                                self.t(fit_msg_key, n=0, total=len(stars))
             self._progress = (20, 100)
             fitted = fit_star_psfs(data, stars, progress_cb=progress_cb)
 
