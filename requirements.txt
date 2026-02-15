@@ -1,3 +1,9 @@
 # Backfocus Calculator
-# No external dependencies required - uses Python's built-in tkinter
 # Python 3.8+ required
+# These dependencies are needed for the FITS Backfocus Analyzer feature.
+# The main application works without them (tkinter only).
+numpy>=1.20
+scipy>=1.7
+astropy>=5.0
+photutils>=1.5
+matplotlib>=3.5
