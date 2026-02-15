@@ -185,6 +185,10 @@ TR = {
     "no_config":         {"en": "Select a configuration first", "fr": "Sélectionnez d'abord une configuration"},
     "bf_start_after_end":{"en": "BF Start must be before BF End.", "fr": "Le début BF doit être avant la fin BF."},
     "bf_end_before_start":{"en": "BF End must be after BF Start.", "fr": "La fin BF doit être après le début BF."},
+    "fits_analyzer":     {"en": "FITS / XISF Backfocus Analyzer\u2026", "fr": "Analyseur FITS / XISF de backfocus\u2026"},
+    "fits_analyzer_missing_deps": {
+        "en": "The FITS analyzer requires additional packages.\n\nRun:\n  pip install numpy scipy astropy photutils matplotlib\n\nOr relaunch with launch.bat / launch.sh to install automatically.",
+        "fr": "L'analyseur FITS nécessite des paquets supplémentaires.\n\nExécutez :\n  pip install numpy scipy astropy photutils matplotlib\n\nOu relancez avec launch.bat / launch.sh pour installer automatiquement."},
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -224,6 +228,13 @@ try:
     from reference_data import REFERENCE_DB
 except ImportError:
     REFERENCE_DB = []
+
+# ── FITS Analyzer (optional) ──
+try:
+    from fits_analyzer import FITSAnalyzerWindow
+    _HAS_FITS_ANALYZER = True
+except ImportError:
+    _HAS_FITS_ANALYZER = False
 
 # ── Pre-built index for fast auto-fill lookup ──
 _REF_INDEX = {}  # {lowercase_key: ref_entry}
@@ -648,6 +659,25 @@ def open_help(parent, lang="en"):
         b("Roue \u00e0 filtres, Porte-filtre, OAG, Rotateur, Porte-oculaire, Renvoi coud\u00e9.")
         b("Bague d\u2019adaptation, Espaceur, Anti-tilt, Lunette guide, Miroir basculant.")
 
+        h("13. Analyseur FITS / XISF de backfocus","h2")
+        p("Ouvrez via le menu Affichage > Analyseur FITS / XISF de backfocus. Cet outil analyse une image astro pour diagnostiquer une erreur de backfocus \u00e0 partir du pattern d\u2019allongement des \u00e9toiles.")
+        h("Formats support\u00e9s","h3")
+        b("FITS : .fits, .fit, .fts (majuscules/minuscules)")
+        b("FITS compress\u00e9 (fpack) : .fits.fz, .fit.fz")
+        b("XISF (PixInsight) : .xisf")
+        b("Images RGB automatiquement converties en luminance.")
+        b("Images > 4096\u00d74096 automatiquement binn\u00e9es 2\u00d72.")
+        h("Comment \u00e7a marche","h3")
+        b("1. Cliquez Parcourir pour charger une image, puis Analyser.")
+        b("2. L\u2019outil d\u00e9tecte les \u00e9toiles (DAOStarFinder), ajuste une gaussienne 2D elliptique sur chacune.")
+        b("3. Carte FWHM : surface polynomiale du FWHM (plus gros au bord = erreur de BF).")
+        b("4. Champ vectoriel : direction d\u2019allongement de chaque \u00e9toile, color\u00e9 radial (vert) vs tangentiel (orange).")
+        b("5. Verdict : Correct (vert), Trop court (ajouter espaceurs), ou Trop long (retirer espaceurs).")
+        h("Interpr\u00e9tation","h3")
+        b("Allongement radial (\u00e9toiles pointant vers le bord) \u2192 backfocus trop court.")
+        b("Allongement tangentiel (\u00e9toiles en tourbillon) \u2192 backfocus trop long.")
+        b("Note : l\u2019analyse mono-image donne la direction, pas l\u2019\u00e9cart pr\u00e9cis en mm.")
+
     else:
         h("Backfocus Calculator v1 \u2014 Complete Guide")
         p("Welcome! This application helps you design and verify optical trains for astrophotography. Dark space theme, galaxy cursor, 12,000+ real product database.")
@@ -762,6 +792,25 @@ def open_help(parent, lang="en"):
         b("Barlow, Focal Reducer, Field Flattener, Focal Extender, Coma Corrector.")
         b("Filter Wheel, Filter Holder, OAG, Rotator, Focuser, Diagonal.")
         b("Adapter Ring, Spacer, Anti-tilt, Guide Scope, Flip Mirror.")
+
+        h("13. FITS / XISF Backfocus Analyzer","h2")
+        p("Open via View > FITS / XISF Backfocus Analyzer. This tool analyzes an astro image to diagnose backfocus error from the star elongation pattern.")
+        h("Supported Formats","h3")
+        b("FITS: .fits, .fit, .fts (case-insensitive)")
+        b("Compressed FITS (fpack): .fits.fz, .fit.fz")
+        b("XISF (PixInsight): .xisf")
+        b("RGB images automatically converted to luminance.")
+        b("Images > 4096\u00d74096 automatically binned 2\u00d72.")
+        h("How It Works","h3")
+        b("1. Click Browse to load an image, then Analyze.")
+        b("2. The tool detects stars (DAOStarFinder), fits an elliptical 2D Gaussian on each one.")
+        b("3. FWHM map: polynomial surface of FWHM (larger at edges = BF error).")
+        b("4. Vector field: elongation direction of each star, colored radial (green) vs tangential (orange).")
+        b("5. Verdict: Correct (green), Too short (add spacers), or Too long (remove spacers).")
+        h("Interpretation","h3")
+        b("Radial elongation (stars pointing toward the edge) \u2192 backfocus too short.")
+        b("Tangential elongation (swirl pattern) \u2192 backfocus too long.")
+        b("Note: single-image analysis gives direction only, not a precise offset in mm.")
     txt.configure(state="disabled")
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1146,6 +1195,7 @@ class App:
             if added or purged:
                 save_data(self.data)
         self._catalog_win = None
+        self._fits_win = None
         self._apply_theme()
         self._build_ui()
         self._apply_language()
@@ -1503,6 +1553,16 @@ class App:
             self._catalog_win.win.lift()
         else:
             self._catalog_win = CatalogWindow(self)
+
+    def _open_fits_analyzer(self):
+        if not _HAS_FITS_ANALYZER:
+            messagebox.showinfo(self.t("fits_analyzer"),
+                                self.t("fits_analyzer_missing_deps"))
+            return
+        if self._fits_win and self._fits_win.win.winfo_exists():
+            self._fits_win.win.lift()
+        else:
+            self._fits_win = FITSAnalyzerWindow(self)
 
     def _new_part(self):
         self._open_catalog()
@@ -2898,6 +2958,8 @@ class App:
 
         vm = tk.Menu(self.menu, tearoff=0, **mo)
         vm.add_command(label=self.t("open_catalog"), command=self._open_catalog)
+        vm.add_separator()
+        vm.add_command(label=self.t("fits_analyzer"), command=self._open_fits_analyzer)
         self.menu.add_cascade(label=self.t("view"), menu=vm)
 
         sm = tk.Menu(self.menu, tearoff=0, **mo)
