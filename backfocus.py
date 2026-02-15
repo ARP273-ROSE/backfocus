@@ -246,52 +246,57 @@ for _ref in REFERENCE_DB:
     _REF_BRANDS.add(_ref.get("brand",""))
 _REF_KEYS_SORTED = sorted(_REF_INDEX.keys())  # for binary search prefix matching
 
+import platform as _platform
+_os_name = _platform.system()
+FONT_FAMILY = "Segoe UI" if _os_name == "Windows" else ("SF Pro Display" if _os_name == "Darwin" else "DejaVu Sans")
+FONT_MONO = "Cascadia Code" if _os_name == "Windows" else "DejaVu Sans Mono"
+
 # ═══════════════════════════════════════════════════════════════════
 #  COLOR PALETTE (Soft Space Theme – varied pastels)
 # ═══════════════════════════════════════════════════════════════════
 C = {
-    "bg_dark":       "#101018",
-    "bg_mid":        "#181822",
-    "bg_light":      "#22222E",
-    "bg_hover":      "#2C2C3A",
-    "bg_selected":   "#3A2E5A",
-    "fg_main":       "#D0D0DA",
-    "fg_dim":        "#706880",
-    "fg_bright":     "#EDE8F2",
-    "accent_blue":   "#7AACCE",
-    "accent_purple": "#B08AD8",
-    "accent_teal":   "#72C4B8",
-    "accent_pink":   "#D8A0B8",
-    "accent_gold":   "#D4B878",
-    "accent_green":  "#88C8A0",
-    "accent_red":    "#D08070",
-    "accent_orange": "#D4A870",
-    "border":        "#302838",
-    "bf_zone":       "#1E2828",
-    "canvas_bg":     "#121218",
-    "tree_odd":      "#161620",
-    "tree_even":     "#1C1C28",
-    "separator":     "#2A2438",
-    "tab_active":    "#22222E",
-    "tab_inactive":  "#141418",
-    "menu_bg":       "#181822",
-    "btn_bg":        "#262630",
-    "btn_hover":     "#38304A",
-    "btn_active":    "#4A3A68",
-    "owned_bg":      "#1E1E14",
-    "notowned_fg":   "#585060",
+    "bg_dark":       "#1A1A2A",
+    "bg_mid":        "#222234",
+    "bg_light":      "#2C2C40",
+    "bg_hover":      "#38384E",
+    "bg_selected":   "#483870",
+    "fg_main":       "#D8D8E4",
+    "fg_dim":        "#807896",
+    "fg_bright":     "#F2EEF8",
+    "accent_blue":   "#88BCDE",
+    "accent_purple": "#C09AE8",
+    "accent_teal":   "#80D8CC",
+    "accent_pink":   "#E8AACC",
+    "accent_gold":   "#E4C880",
+    "accent_green":  "#96DCAE",
+    "accent_red":    "#E08878",
+    "accent_orange": "#E4B878",
+    "border":        "#403850",
+    "bf_zone":       "#283838",
+    "canvas_bg":     "#1C1C2C",
+    "tree_odd":      "#20202E",
+    "tree_even":     "#282836",
+    "separator":     "#3A3450",
+    "tab_active":    "#2C2C40",
+    "tab_inactive":  "#1E1E28",
+    "menu_bg":       "#222234",
+    "btn_bg":        "#303044",
+    "btn_hover":     "#484060",
+    "btn_active":    "#5A4A7C",
+    "owned_bg":      "#282820",
+    "notowned_fg":   "#686078",
 }
 
 TYPE_COLORS = {
-    "type_telescope": "#D08878", "type_refractor": "#C88070", "type_camera_lens": "#B87868",
-    "type_camera": "#7AACCE", "type_dslr": "#6EA0C0", "type_eyepiece": "#6898B8",
-    "type_filter_wheel": "#B08AD8", "type_filter_holder": "#A882C8",
-    "type_oag": "#72C4B8", "type_rotator": "#D4A870", "type_focuser": "#C0986A",
-    "type_adapter": "#808890", "type_spacer": "#909098",
-    "type_reducer": "#88C8A0", "type_flattener": "#80C098", "type_extender": "#68A880",
-    "type_corrector": "#68A880", "type_barlow": "#70B088",
-    "type_anti_tilt": "#D4B878", "type_diagonal": "#B8A07A",
-    "type_guide_scope": "#70A8C0", "type_flip_mirror": "#A880A8",
+    "type_telescope": "#E09484", "type_refractor": "#D88C7C", "type_camera_lens": "#C88474",
+    "type_camera": "#88BCDE", "type_dslr": "#7EB0D0", "type_eyepiece": "#78A8C8",
+    "type_filter_wheel": "#C09AE8", "type_filter_holder": "#B892D8",
+    "type_oag": "#80D8CC", "type_rotator": "#E4B878", "type_focuser": "#D0A87A",
+    "type_adapter": "#909CA6", "type_spacer": "#A0A0AC",
+    "type_reducer": "#96DCAE", "type_flattener": "#90D4A8", "type_extender": "#78BC90",
+    "type_corrector": "#78BC90", "type_barlow": "#80C498",
+    "type_anti_tilt": "#E4C880", "type_diagonal": "#C8B08A",
+    "type_guide_scope": "#80B8D0", "type_flip_mirror": "#B890B8",
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -432,10 +437,12 @@ class Tooltip:
         x = self.widget.winfo_rootx() + 20
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
         self.tip = tk.Toplevel(self.widget)
-        self.tip.overrideredirect(True); self.tip.attributes("-topmost", True)
+        self.tip.overrideredirect(True)
+        try: self.tip.attributes("-topmost", True)
+        except tk.TclError: pass
         txt = self.fr if self.app and self.app.lang == "fr" else self.en
         lbl = tk.Label(self.tip, text=txt, bg=C["bg_hover"], fg=C["fg_bright"],
-                       font=("Segoe UI", 8), wraplength=340, padx=8, pady=5,
+                       font=(FONT_FAMILY, 8), wraplength=340, padx=8, pady=5,
                        justify=tk.LEFT, relief="solid", bd=1)
         lbl.pack(); self.tip.geometry(f"+{x}+{y}")
 
@@ -447,7 +454,8 @@ class GalaxyCursor:
     def __init__(self, root):
         self.root = root
         self.win = tk.Toplevel(root); self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True)
+        try: self.win.attributes("-topmost", True)
+        except tk.TclError: pass
         trans = "#010101"; self.win.configure(bg=trans)
         self.canvas = tk.Canvas(self.win, width=self.SIZE, height=self.SIZE,
                                 bg=trans, highlightthickness=0, bd=0)
@@ -528,18 +536,18 @@ def open_help(parent, lang="en"):
     w.geometry("920x720"); w.configure(bg=C["bg_mid"])
     fr = ttk.Frame(w); fr.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
     txt = tk.Text(fr, wrap=tk.WORD, bg=C["bg_dark"], fg=C["fg_main"],
-                  font=("Segoe UI",10), padx=20, pady=15, insertbackground=C["fg_main"],
+                  font=(FONT_FAMILY,10), padx=20, pady=15, insertbackground=C["fg_main"],
                   highlightthickness=0, relief="flat")
     sb = ttk.Scrollbar(fr, orient=tk.VERTICAL, command=txt.yview)
     txt.configure(yscrollcommand=sb.set)
     txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); sb.pack(side=tk.RIGHT, fill=tk.Y)
-    for tag, cfg in [("h1",{"font":("Segoe UI",16,"bold"),"foreground":C["accent_blue"],"spacing1":20,"spacing3":10}),
-                     ("h2",{"font":("Segoe UI",12,"bold"),"foreground":C["accent_teal"],"spacing1":15,"spacing3":8}),
-                     ("h3",{"font":("Segoe UI",10,"bold"),"foreground":C["accent_purple"],"spacing1":10,"spacing3":5}),
-                     ("body",{"font":("Segoe UI",10),"foreground":C["fg_main"],"spacing3":4}),
-                     ("bullet",{"font":("Segoe UI",10),"foreground":C["fg_main"],"lmargin1":30,"lmargin2":45}),
+    for tag, cfg in [("h1",{"font":(FONT_FAMILY,16,"bold"),"foreground":C["accent_blue"],"spacing1":20,"spacing3":10}),
+                     ("h2",{"font":(FONT_FAMILY,12,"bold"),"foreground":C["accent_teal"],"spacing1":15,"spacing3":8}),
+                     ("h3",{"font":(FONT_FAMILY,10,"bold"),"foreground":C["accent_purple"],"spacing1":10,"spacing3":5}),
+                     ("body",{"font":(FONT_FAMILY,10),"foreground":C["fg_main"],"spacing3":4}),
+                     ("bullet",{"font":(FONT_FAMILY,10),"foreground":C["fg_main"],"lmargin1":30,"lmargin2":45}),
                      ("accent",{"foreground":C["accent_gold"]}),
-                     ("key",{"font":("Consolas",9),"foreground":C["accent_green"]})]:
+                     ("key",{"font":(FONT_MONO,9),"foreground":C["accent_green"]})]:
         txt.tag_configure(tag, **cfg)
     def h(s,t="h1"): txt.insert(tk.END,s+"\n",t)
     def p(s,t="body"): txt.insert(tk.END,s+"\n\n",t)
@@ -674,6 +682,11 @@ def open_help(parent, lang="en"):
         b("3. Carte FWHM : surface polynomiale du FWHM (plus gros au bord = erreur de BF).")
         b("4. Champ vectoriel : direction d\u2019allongement de chaque \u00e9toile, color\u00e9 radial (vert) vs tangentiel (orange).")
         b("5. Verdict : Correct (vert), Trop court (ajouter espaceurs), ou Trop long (retirer espaceurs).")
+        h("Mosa\u00efque 3\u00d73","h3")
+        b("L\u2019onglet Mosa\u00efque 3\u00d73 affiche 9 crops de l\u2019image (coins, bords, centre) avec les \u00e9toiles d\u00e9tect\u00e9es entour\u00e9es.")
+        b("Chaque tuile indique le FWHM moyen et le nombre d\u2019\u00e9toiles. La bordure est color\u00e9e selon la qualit\u00e9 relative au centre :")
+        b("Vert (\u22641.05\u00d7) = excellent, Teal (\u22641.20\u00d7) = bon, Orange (\u22641.40\u00d7) = moyen, Rouge (>1.40\u00d7) = mauvais.")
+        b("Inspir\u00e9 de l\u2019Aberration Inspector d\u2019Ekos (KStars).")
         h("Interpr\u00e9tation","h3")
         b("Allongement radial (\u00e9toiles pointant vers le bord) \u2192 backfocus trop court.")
         b("Allongement tangentiel (\u00e9toiles en tourbillon) \u2192 backfocus trop long.")
@@ -808,6 +821,11 @@ def open_help(parent, lang="en"):
         b("3. FWHM map: polynomial surface of FWHM (larger at edges = BF error).")
         b("4. Vector field: elongation direction of each star, colored radial (green) vs tangential (orange).")
         b("5. Verdict: Correct (green), Too short (add spacers), or Too long (remove spacers).")
+        h("Mosaic 3\u00d73","h3")
+        b("The Mosaic 3\u00d73 tab displays 9 image crops (corners, edges, center) with detected stars circled.")
+        b("Each tile shows the mean FWHM and star count. The border is color-coded by quality relative to center:")
+        b("Green (\u22641.05\u00d7) = excellent, Teal (\u22641.20\u00d7) = good, Orange (\u22641.40\u00d7) = fair, Red (>1.40\u00d7) = poor.")
+        b("Inspired by the Ekos (KStars) Aberration Inspector.")
         h("Interpretation","h3")
         b("Radial elongation (stars pointing toward the edge) \u2192 backfocus too short.")
         b("Tangential elongation (swirl pattern) \u2192 backfocus too long.")
@@ -834,7 +852,7 @@ class CatalogWindow:
 
     def _build(self):
         a = self.app
-        lbl_kw = dict(foreground=C["fg_dim"], font=("Segoe UI",7))
+        lbl_kw = dict(foreground=C["fg_dim"], font=(FONT_FAMILY,7))
 
         # ── filter toolbar (labeled groups) ──
         tb = ttk.Frame(self.win); tb.pack(fill=tk.X, padx=8, pady=(6,2))
@@ -974,7 +992,7 @@ class CatalogWindow:
         self._status = ttk.Label(sf, text="", style="Calc.TLabel")
         self._status.pack(side=tk.LEFT)
         self._drag_hint = ttk.Label(sf, text=self.app.t("drag_hint"),
-                                    foreground=C["fg_dim"], font=("Segoe UI",8))
+                                    foreground=C["fg_dim"], font=(FONT_FAMILY,8))
         self._drag_hint.pack(side=tk.RIGHT, padx=(10,0))
 
     def _reset(self):
@@ -1134,7 +1152,8 @@ class CatalogWindow:
         if self._drag_win is None:
             self._drag_win = tk.Toplevel(self.win)
             self._drag_win.overrideredirect(True)
-            self._drag_win.attributes("-topmost", True)
+            try: self._drag_win.attributes("-topmost", True)
+            except tk.TclError: pass
             if sys.platform == "win32":
                 try: self._drag_win.attributes("-alpha", 0.85)
                 except tk.TclError: pass
@@ -1144,9 +1163,9 @@ class CatalogWindow:
             fr = tk.Frame(self._drag_win, bg=col, padx=2, pady=2)
             fr.pack()
             tk.Label(fr, text=f"  {name}  ", bg=C["bg_light"], fg=C["fg_bright"],
-                     font=("Segoe UI",9,"bold"), padx=8, pady=4).pack()
+                     font=(FONT_FAMILY,9,"bold"), padx=8, pady=4).pack()
             tk.Label(fr, text=f"{ptype} · {p.get('optical_length',0):.1f} mm",
-                     bg=C["bg_light"], fg=C["fg_dim"], font=("Segoe UI",7), padx=8, pady=1).pack()
+                     bg=C["bg_light"], fg=C["fg_dim"], font=(FONT_FAMILY,7), padx=8, pady=1).pack()
         x = self.win.winfo_pointerx() + 16
         y = self.win.winfo_pointery() + 16
         self._drag_win.geometry(f"+{x}+{y}")
@@ -1242,7 +1261,7 @@ class App:
         for name, color in [("n", C["btn_bg"]), ("h", C["btn_hover"]),
                             ("a", C["btn_active"]),
                             ("an", C["accent_teal"]), ("ah", C["accent_green"]),
-                            ("fn", C["accent_purple"]), ("fh", "#C8A0E8")]:
+                            ("fn", C["accent_purple"]), ("fh", "#D0ACF0")]:
             imgs[name] = self._pill_img(self.root, SZ, SZ, R, color)
         bd = (R, R, R, R)  # 9-slice border insets
         s.element_create("RoundBtn.bg", "image", imgs["n"],
@@ -1256,20 +1275,20 @@ class App:
         s.configure(".", background=C["bg_mid"], foreground=C["fg_main"],
                     bordercolor=C["border"], darkcolor=C["bg_dark"],
                     lightcolor=C["bg_light"], troughcolor=C["bg_dark"],
-                    fieldbackground=C["bg_light"], font=("Segoe UI",9))
+                    fieldbackground=C["bg_light"], font=(FONT_FAMILY,9))
 
         # ── frames & labels ──
         s.configure("TFrame", background=C["bg_mid"])
         s.configure("TLabel", background=C["bg_mid"], foreground=C["fg_main"],
                     padding=(2,2))
-        s.configure("Title.TLabel", font=("Segoe UI",12,"bold"),
+        s.configure("Title.TLabel", font=(FONT_FAMILY,12,"bold"),
                     foreground=C["accent_purple"], padding=(4,6))
-        s.configure("Section.TLabel", font=("Segoe UI",9,"bold"),
+        s.configure("Section.TLabel", font=(FONT_FAMILY,9,"bold"),
                     foreground=C["accent_teal"], padding=(2,4))
-        s.configure("Result.TLabel", font=("Segoe UI",11,"bold"),
+        s.configure("Result.TLabel", font=(FONT_FAMILY,11,"bold"),
                     foreground=C["fg_bright"], padding=(4,4))
-        s.configure("Big.TLabel", font=("Segoe UI",14,"bold"), padding=(4,4))
-        s.configure("Calc.TLabel", font=("Segoe UI",10), padding=(2,2))
+        s.configure("Big.TLabel", font=(FONT_FAMILY,14,"bold"), padding=(4,4))
+        s.configure("Calc.TLabel", font=(FONT_FAMILY,10), padding=(2,2))
 
         # ── buttons: rounded pill background ──
         s.layout("TButton", [
@@ -1279,7 +1298,7 @@ class App:
                 ]})
             ]})
         ])
-        s.configure("TButton", foreground=C["fg_main"], font=("Segoe UI",9),
+        s.configure("TButton", foreground=C["fg_main"], font=(FONT_FAMILY,9),
                     padding=(12,6), anchor="center")
         s.map("TButton", foreground=[("disabled",C["fg_dim"])])
 
@@ -1291,7 +1310,7 @@ class App:
             ]})
         ])
         s.configure("Accent.TButton", foreground=C["bg_dark"],
-                    font=("Segoe UI",9,"bold"), padding=(14,7), anchor="center")
+                    font=(FONT_FAMILY,9,"bold"), padding=(14,7), anchor="center")
 
         s.element_create("FITSBtn.bg", "image", imgs["fn"],
                          ("active", imgs["fh"]), ("pressed", imgs["a"]),
@@ -1304,9 +1323,9 @@ class App:
             ]})
         ])
         s.configure("FITS.TButton", foreground=C["fg_bright"],
-                    font=("Segoe UI",10,"bold"), padding=(18,8), anchor="center")
+                    font=(FONT_FAMILY,10,"bold"), padding=(18,8), anchor="center")
 
-        s.configure("Small.TButton", padding=(6,3), font=("Segoe UI",8))
+        s.configure("Small.TButton", padding=(6,3), font=(FONT_FAMILY,8))
 
         # ── entries: softer focus glow ──
         s.configure("TEntry", fieldbackground=C["bg_light"], foreground=C["fg_main"],
@@ -1339,7 +1358,7 @@ class App:
         s.configure("TNotebook", background=C["bg_dark"], borderwidth=0)
         s.configure("TNotebook.Tab", background=C["tab_inactive"],
                     foreground=C["fg_dim"], padding=(14,7),
-                    font=("Segoe UI",10))
+                    font=(FONT_FAMILY,10))
         s.map("TNotebook.Tab",
               background=[("selected",C["tab_active"])],
               foreground=[("selected",C["accent_gold"])],
@@ -1348,10 +1367,10 @@ class App:
         # ── treeviews: taller rows, teal headings ──
         s.configure("Treeview", background=C["tree_odd"], foreground=C["fg_main"],
                     fieldbackground=C["tree_odd"], borderwidth=0,
-                    rowheight=28, font=("Segoe UI",9))
+                    rowheight=28, font=(FONT_FAMILY,9))
         s.configure("Treeview.Heading", background=C["bg_dark"],
                     foreground=C["accent_teal"],
-                    font=("Segoe UI",9,"bold"), borderwidth=0,
+                    font=(FONT_FAMILY,9,"bold"), borderwidth=0,
                     relief="flat", padding=(4,4))
         s.map("Treeview",
               background=[("selected",C["bg_selected"])],
@@ -1370,7 +1389,7 @@ class App:
                     bordercolor=C["border"], relief="groove", borderwidth=1)
         s.configure("TLabelframe.Label", background=C["bg_mid"],
                     foreground=C["accent_pink"],
-                    font=("Segoe UI",9,"bold"), padding=(4,2))
+                    font=(FONT_FAMILY,9,"bold"), padding=(4,2))
 
         # ── separators & progress ──
         s.configure("TSeparator", background=C["separator"])
@@ -1380,7 +1399,7 @@ class App:
     # ── UI skeleton ──
     def _build_ui(self):
         self.root.title(self.t("app_title"))
-        self.root.geometry("1400x880"); self.root.minsize(1050,700)
+        self.root.geometry("1400x920"); self.root.minsize(1050,740)
         self.menu = tk.Menu(self.root, bg=C["menu_bg"], fg=C["fg_main"],
                             activebackground=C["bg_selected"], activeforeground=C["fg_bright"],
                             bd=0, relief="flat")
@@ -1440,7 +1459,7 @@ class App:
 
         self.clist = tk.Listbox(left, selectmode=tk.SINGLE, bg=C["bg_light"], fg=C["fg_main"],
                                 selectbackground=C["bg_selected"], selectforeground=C["fg_bright"],
-                                highlightthickness=0, bd=0, relief="flat", font=("Segoe UI",10),
+                                highlightthickness=0, bd=0, relief="flat", font=(FONT_FAMILY,10),
                                 exportselection=False)
         self.clist.pack(fill=tk.BOTH, expand=True, pady=6)
         self.clist.bind("<<ListboxSelect>>", self._on_cfg_select)
@@ -1469,6 +1488,28 @@ class App:
         self.v_notes.trace_add("write", lambda *_: self._save_cfg())
         ttk.Entry(top, textvariable=self.v_notes, width=35).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # ── bottom (packed BEFORE mid so it's never clipped) ──
+        bot = ttk.Frame(right); bot.pack(side=tk.BOTTOM, fill=tk.X, pady=6)
+        cf = ttk.LabelFrame(bot, text="Backfocus")
+        cf.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0,6))
+        self.lbl_total = ttk.Label(cf, text="", style="Calc.TLabel")
+        self.lbl_total.pack(anchor=tk.W, padx=10, pady=2)
+        self.lbl_bf = ttk.Label(cf, text="", style="Result.TLabel")
+        self.lbl_bf.pack(anchor=tk.W, padx=10, pady=2)
+        self.lbl_diff = ttk.Label(cf, text="", style="Big.TLabel")
+        self.lbl_diff.pack(anchor=tk.W, padx=10, pady=2)
+        df = ttk.LabelFrame(bot, text=self.t("diagram"))
+        df.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(df, height=120, bg=C["canvas_bg"], highlightthickness=0, bd=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self._drop_highlight = False
+        self._diag_ranges = []
+        self._diag_drag_idx = None
+        self.canvas.bind("<ButtonPress-1>", self._diag_drag_start)
+        self.canvas.bind("<B1-Motion>", self._diag_drag_motion)
+        self.canvas.bind("<ButtonRelease-1>", self._diag_drag_end)
+
+        # ── mid (treeview — fills remaining space) ──
         mid = ttk.Frame(right); mid.pack(fill=tk.BOTH, expand=True)
 
         sf = ttk.LabelFrame(mid, text=self.t("train_label"))
@@ -1487,7 +1528,7 @@ class App:
         self.stree.tag_configure("bf_end", foreground=C["accent_pink"])
         self.stree.tag_configure("mismatch", foreground=C["accent_red"])
         self.stree.tag_configure("ghost", foreground=C["accent_orange"],
-                                 background="#2A2018")
+                                 background="#342C22")
         self.stree.tag_configure("odd", background=C["tree_odd"])
         self.stree.tag_configure("even", background=C["tree_even"])
         self.stree.bind("<Double-1>", lambda e: self._stack_edit())
@@ -1544,32 +1585,12 @@ class App:
                 setattr(self, f"btn_{key}", b)
                 self._tip(b, tip_en, tip_fr)
 
-        # bottom
-        bot = ttk.Frame(right); bot.pack(fill=tk.X, pady=6)
-        cf = ttk.LabelFrame(bot, text="Backfocus")
-        cf.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,6))
-        self.lbl_total = ttk.Label(cf, text="", style="Calc.TLabel")
-        self.lbl_total.pack(anchor=tk.W, padx=10, pady=2)
-        self.lbl_bf = ttk.Label(cf, text="", style="Result.TLabel")
-        self.lbl_bf.pack(anchor=tk.W, padx=10, pady=2)
-        self.lbl_diff = ttk.Label(cf, text="", style="Big.TLabel")
-        self.lbl_diff.pack(anchor=tk.W, padx=10, pady=2)
-        df = ttk.LabelFrame(bot, text=self.t("diagram"))
-        df.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.canvas = tk.Canvas(df, height=90, bg=C["canvas_bg"], highlightthickness=0, bd=0)
-        self.canvas.pack(fill=tk.X, padx=6, pady=6)
-        self._drop_highlight = False  # visual feedback for drag-over
-        # -- drag reorder in diagram --
-        self._diag_ranges = []  # [(x_start, x_end, stack_idx), ...]
-        self._diag_drag_idx = None
-        self.canvas.bind("<ButtonPress-1>", self._diag_drag_start)
-        self.canvas.bind("<B1-Motion>", self._diag_drag_motion)
-        self.canvas.bind("<ButtonRelease-1>", self._diag_drag_end)
         _tip_lbl = tk.Label(self.root, text="\u2615", fg=C["fg_dim"], bg=C["bg_dark"],
-                            font=("Segoe UI",7), cursor="hand2")
+                            font=(FONT_FAMILY,7), cursor="hand2")
         _tip_lbl.pack(side=tk.BOTTOM, anchor=tk.E, padx=6, pady=(0,2))
         _tip_lbl.bind("<Button-1>", lambda e: __import__('webbrowser').open("https://buymeacoffee.com/orlytourbou"))
-        self._refresh_cfgs()
+        # Defer first config load so the canvas has real dimensions after layout
+        self.root.after_idle(self._refresh_cfgs)
 
     # ── open catalog ──
     def _open_catalog(self):
@@ -1615,7 +1636,7 @@ class App:
 
     def _add_config(self):
         dlg = tk.Toplevel(self.root); dlg.title(self.t("add_config"))
-        dlg.geometry("400x180"); dlg.transient(self.root); dlg.grab_set()
+        dlg.geometry("400x180"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
         dlg.configure(bg=C["bg_mid"])
         nv = tk.StringVar(); tv = tk.StringVar(value="55")
         ttk.Label(dlg, text=self.t("config_name")).grid(row=0,column=0,padx=10,pady=10,sticky=tk.W)
@@ -1656,7 +1677,7 @@ class App:
         if i is None: return
         cfg = self.data["configurations"][i]
         dlg = tk.Toplevel(self.root); dlg.title(self.t("edit_config"))
-        dlg.geometry("400x180"); dlg.transient(self.root); dlg.grab_set()
+        dlg.geometry("400x180"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
         dlg.configure(bg=C["bg_mid"])
         nv = tk.StringVar(value=cfg["name"])
         tv = tk.StringVar(value=str(cfg.get("target_backfocus", 0)))
@@ -1812,7 +1833,7 @@ class App:
         if si >= len(stack): return
         p = stack[si]
         dlg = tk.Toplevel(self.root); dlg.title(self.t("edit_part"))
-        dlg.geometry("600x660"); dlg.transient(self.root); dlg.grab_set()
+        dlg.geometry("600x660"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
         dlg.configure(bg=C["bg_mid"])
         r = 0; vars_ = {}
         def _row(label, key, wf, **kw):
@@ -2069,13 +2090,13 @@ class App:
                     rr(c, x-1,yt-5,x+bw+1,yt+bh+5, r=rad+2,fill=C["bf_zone"],outline="")
                 if is_ghost:
                     rr(c, x,yt,x+bw,yt+bh, r=rad, fill="", outline=C["accent_orange"])
-                    c.create_text(x+bw/2,yt+bh/2,text="?",font=("Segoe UI",12,"bold"),fill=C["accent_orange"])
+                    c.create_text(x+bw/2,yt+bh/2,text="?",font=(FONT_FAMILY,12,"bold"),fill=C["accent_orange"])
                 else:
                     rr(c, x+1,yt+1,x+bw-1,yt+bh-1, r=rad, fill=col, outline="")
                     rr(c, x,yt,x+bw,yt+bh, r=rad, fill="", outline=C["border"])
                     if bw > 24:
-                        c.create_text(x+bw/2,yt+bh/2,text=item.get("name","")[:16],font=("Segoe UI",7),fill=C["bg_dark"])
-                c.create_text(x+bw/2,yt+bh+12,text=f'{item.get("optical_length",0):.1f}',font=("Segoe UI",7),fill=C["fg_dim"])
+                        c.create_text(x+bw/2,yt+bh/2,text=item.get("name","")[:16],font=(FONT_FAMILY,7),fill=C["bg_dark"])
+                c.create_text(x+bw/2,yt+bh+12,text=f'{item.get("optical_length",0):.1f}',font=(FONT_FAMILY,7),fill=C["fg_dim"])
             if si == tgt and tgt >= src:
                 insert_x = x + bw
             x += bw
@@ -2100,9 +2121,9 @@ class App:
             rr(c, fx, fy, fx+fw, fy+bh, r=rad, fill=col, outline=C["accent_green"])
             if fw > 24:
                 c.create_text(fx+fw/2, fy+bh/2, text=item.get("name","")[:16],
-                              font=("Segoe UI",7,"bold"), fill=C["fg_bright"])
-        c.create_text(margin, yt-12, text="Telescope", font=("Segoe UI",7), fill=C["fg_dim"], anchor=tk.W)
-        c.create_text(W-margin, yt-12, text="Camera", font=("Segoe UI",7), fill=C["fg_dim"], anchor=tk.E)
+                              font=(FONT_FAMILY,7,"bold"), fill=C["fg_bright"])
+        c.create_text(margin, yt-12, text="Telescope", font=(FONT_FAMILY,7), fill=C["fg_dim"], anchor=tk.W)
+        c.create_text(W-margin, yt-12, text="Camera", font=(FONT_FAMILY,7), fill=C["fg_dim"], anchor=tk.E)
 
     def _diag_drag_end(self, event):
         if self._diag_drag_idx is not None and getattr(self, "_diag_drag_started", False):
@@ -2175,7 +2196,7 @@ class App:
                 matches.append((pi, p))
         # Show resolution dialog
         dlg = tk.Toplevel(self.root); dlg.title(self.t("resolve_title"))
-        dlg.geometry("850x500"); dlg.transient(self.root); dlg.grab_set()
+        dlg.geometry("850x500"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
         dlg.configure(bg=C["bg_mid"])
         ttk.Label(dlg, text=self.t("resolve_need", tside=f"{need_tt} {need_tg}".strip() or "?",
                   cside=f"{need_ct} {need_cg}".strip() or "?"),
@@ -2214,7 +2235,7 @@ class App:
     # ── pick part ──
     def _pick_part_dlg(self, ci):
         dlg = tk.Toplevel(self.root); dlg.title(self.t("add_to_stack"))
-        dlg.geometry("850x520"); dlg.transient(self.root); dlg.grab_set()
+        dlg.geometry("850x520"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
         dlg.configure(bg=C["bg_mid"])
         ftop = ttk.Frame(dlg); ftop.pack(fill=tk.X, padx=10, pady=6)
         sv = tk.StringVar()
@@ -2363,7 +2384,7 @@ class App:
         # Not owned or quantity exceeded -> show adjustment popup
         new_qty = max(total + 1, 1)
         dlg = tk.Toplevel(self.root); dlg.title(self.t("qty_adjust_title"))
-        dlg.geometry("440x240"); dlg.transient(self.root); dlg.grab_set()
+        dlg.geometry("440x240"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
         dlg.configure(bg=C["bg_mid"])
         result = [False]
         if qty <= 0:
@@ -2473,7 +2494,7 @@ class App:
         msg = self.t("conn_warn_msg", prev_name=prev_name, prev_conn=p_out,
                       new_name=new_name, new_conn=p_in, reason=reason)
         dlg = tk.Toplevel(self.root); dlg.title(self.t("conn_warn_title"))
-        dlg.geometry("560x280"); dlg.transient(self.root); dlg.grab_set()
+        dlg.geometry("560x280"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
         dlg.configure(bg=C["bg_mid"])
         result = [False]
         ttk.Label(dlg, text=msg, wraplength=520, justify=tk.LEFT).pack(padx=16, pady=(16,10))
@@ -2533,7 +2554,7 @@ class App:
             "reversible":True,"bf_role":"","qty":0,"notes":""}
         dlg = tk.Toplevel(self.root)
         dlg.title(self.t("edit_part") if is_edit else self.t("add_part"))
-        dlg.geometry("600x660"); dlg.transient(self.root); dlg.grab_set()
+        dlg.geometry("600x660"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
         dlg.configure(bg=C["bg_mid"])
         r = 0; vars_ = {}
         def _row(label, key, wf, **kw):
@@ -2677,9 +2698,13 @@ class App:
     def _draw(self, stack, bf_total, target, bs, be):
         c = self.canvas; c.delete("all"); c.update_idletasks()
         W, H = c.winfo_width(), c.winfo_height()
+        if W < 50:
+            # Canvas not laid out yet — reschedule
+            c.after(50, lambda: self._draw(stack, bf_total, target, bs, be))
+            return
         self._diag_ranges = []
         if not stack:
-            c.create_text(W/2,H/2,text="\u2014",fill=C["fg_dim"],font=("Segoe UI",10)); return
+            c.create_text(W/2,H/2,text="\u2014",fill=C["fg_dim"],font=(FONT_FAMILY,10)); return
         margin = 18; avail = W - 2*margin
         vis_total = sum(max(it.get("optical_length",0),2) for it in stack)
         # Scale relative to target backfocus (with 10% margin), not just the sum of parts
@@ -2701,17 +2726,17 @@ class App:
             if is_ghost:
                 # Dashed outline, no fill
                 rr(c, x,yt,x+bw,yt+bh, r=rad, fill="", outline=C["accent_orange"])
-                c.create_text(x+bw/2,yt+bh/2,text="?",font=("Segoe UI",12,"bold"),fill=C["accent_orange"])
+                c.create_text(x+bw/2,yt+bh/2,text="?",font=(FONT_FAMILY,12,"bold"),fill=C["accent_orange"])
             else:
                 rr(c, x+1,yt+1,x+bw-1,yt+bh-1, r=rad, fill=col, outline="")
                 rr(c, x,yt,x+bw,yt+bh, r=rad, fill="", outline=C["border"])
                 if bw > 24:
-                    c.create_text(x+bw/2,yt+bh/2,text=item.get("name","")[:16],font=("Segoe UI",7),fill=C["bg_dark"])
-            c.create_text(x+bw/2,yt+bh+12,text=f'{item.get("optical_length",0):.1f}',font=("Segoe UI",7),fill=C["fg_dim"])
+                    c.create_text(x+bw/2,yt+bh/2,text=item.get("name","")[:16],font=(FONT_FAMILY,7),fill=C["bg_dark"])
+            c.create_text(x+bw/2,yt+bh+12,text=f'{item.get("optical_length",0):.1f}',font=(FONT_FAMILY,7),fill=C["fg_dim"])
             self._diag_ranges.append((x, x+bw, si))
             x += bw
-        c.create_text(margin,yt-12,text="Telescope",font=("Segoe UI",7),fill=C["fg_dim"],anchor=tk.W)
-        c.create_text(W-margin,yt-12,text="Camera",font=("Segoe UI",7),fill=C["fg_dim"],anchor=tk.E)
+        c.create_text(margin,yt-12,text="Telescope",font=(FONT_FAMILY,7),fill=C["fg_dim"],anchor=tk.W)
+        c.create_text(W-margin,yt-12,text="Camera",font=(FONT_FAMILY,7),fill=C["fg_dim"],anchor=tk.E)
         if target > 0 and ref > 0:
             tx = margin + (target/ref)*avail
             if margin < tx < W-margin:
@@ -2744,7 +2769,7 @@ class App:
                           "new_gap":ng,"part_idx":pi})
         cands.sort(key=lambda cd: abs(cd["new_gap"]))
         dlg = tk.Toplevel(self.root); dlg.title(self.t("suggest_title"))
-        dlg.geometry("640x420"); dlg.transient(self.root); dlg.grab_set(); dlg.configure(bg=C["bg_mid"])
+        dlg.geometry("640x420"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set(); dlg.configure(bg=C["bg_mid"])
         ttk.Label(dlg, text=self.t("suggest_gap",v=gap), style="Result.TLabel").pack(padx=10,pady=6)
         if not cands:
             ttk.Label(dlg, text=self.t("suggest_none")).pack(padx=10,pady=20)
@@ -2753,7 +2778,7 @@ class App:
         tree = ttk.Treeview(dlg, columns=cols, show="headings", selectmode="browse")
         tree.heading("name",text=self.t("part_name")); tree.heading("mm",text="mm"); tree.heading("after",text=self.t("suggest_after"))
         tree.column("name",width=320); tree.column("mm",width=80,anchor=tk.CENTER); tree.column("after",width=130,anchor=tk.CENTER)
-        tree.tag_configure("perfect", background="#1A3320", foreground=C["accent_green"])
+        tree.tag_configure("perfect", background="#244030", foreground=C["accent_green"])
         tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
         for j, cd in enumerate(cands[:40]):
             at = self.t("suggest_perfect") if abs(cd["new_gap"])<0.05 else f'{cd["new_gap"]:+.2f} mm'
@@ -2797,7 +2822,7 @@ class App:
         if abs(gap) < 0.1:
             messagebox.showinfo(self.t("auto_complete"), self.t("status_ok")); return
         dlg = tk.Toplevel(self.root); dlg.title(self.t("ac_title"))
-        dlg.geometry("700x520"); dlg.transient(self.root); dlg.grab_set(); dlg.configure(bg=C["bg_mid"])
+        dlg.geometry("700x520"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set(); dlg.configure(bg=C["bg_mid"])
         ttk.Label(dlg, text=self.t("suggest_gap",v=gap), style="Result.TLabel").pack(padx=10,pady=6)
         chk_f = ttk.Frame(dlg); chk_f.pack(padx=10, anchor=tk.W)
         use_other = tk.BooleanVar(value=False)
@@ -2811,7 +2836,7 @@ class App:
         rtree = ttk.Treeview(rf, columns=cols, show="headings", selectmode="browse")
         rtree.heading("combo",text="Combination"); rtree.heading("total_mm",text="mm"); rtree.heading("remaining",text=self.t("diff_label"))
         rtree.column("combo",width=420); rtree.column("total_mm",width=80,anchor=tk.CENTER); rtree.column("remaining",width=110,anchor=tk.CENTER)
-        rtree.tag_configure("perfect", background="#1A3320", foreground=C["accent_green"])
+        rtree.tag_configure("perfect", background="#244030", foreground=C["accent_green"])
         rtree.pack(fill=tk.BOTH, expand=True)
         solutions = []
         def search():
@@ -3072,6 +3097,18 @@ class App:
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════
 def main():
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except (AttributeError, OSError):
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except (AttributeError, OSError):
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except (AttributeError, OSError):
+                    pass
     root = tk.Tk()
     App(root)
     root.mainloop()

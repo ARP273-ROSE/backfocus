@@ -84,6 +84,20 @@ TR_FITS = {
                                 "Backfocus analysis requires a Light frame with stars.",
                          "fr": "\u26a0 Cette image semble \u00eatre un {frametype}, pas un Light.\n"
                                 "L'analyse de backfocus n\u00e9cessite un Light avec des \u00e9toiles."},
+    "tab_analysis":     {"en": "Analysis",           "fr": "Analyse"},
+    "tab_mosaic":       {"en": "Mosaic 3\u00d73",    "fr": "Mosa\u00efque 3\u00d73"},
+    "tile_fwhm":        {"en": "FWHM: {v:.2f}",     "fr": "FWHM : {v:.2f}"},
+    "tile_stars":       {"en": "{n} stars",          "fr": "{n} \u00e9toiles"},
+    "tile_no_stars":    {"en": "No stars",           "fr": "Aucune \u00e9toile"},
+    "tile_center":      {"en": "Center",             "fr": "Centre"},
+    "tile_top_left":    {"en": "Top-Left",           "fr": "Haut-G"},
+    "tile_top":         {"en": "Top",                "fr": "Haut"},
+    "tile_top_right":   {"en": "Top-Right",          "fr": "Haut-D"},
+    "tile_left":        {"en": "Left",               "fr": "Gauche"},
+    "tile_right":       {"en": "Right",              "fr": "Droite"},
+    "tile_bot_left":    {"en": "Bot-Left",           "fr": "Bas-G"},
+    "tile_bottom":      {"en": "Bottom",             "fr": "Bas"},
+    "tile_bot_right":   {"en": "Bot-Right",          "fr": "Bas-D"},
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -110,26 +124,32 @@ ANALYSIS_DEFAULTS = {
     "sigma_clip_iters": 3,
     "sigma_clip_sigma": 2.5,
     "autobin_threshold": 4096,
+    "mosaic_tile_fraction": 0.20,
 }
+
+import platform as _platform
+_os_name = _platform.system()
+FONT_FAMILY = "Segoe UI" if _os_name == "Windows" else ("SF Pro Display" if _os_name == "Darwin" else "DejaVu Sans")
+FONT_MONO = "Cascadia Code" if _os_name == "Windows" else "DejaVu Sans Mono"
 
 # ═══════════════════════════════════════════════════════════════════
 #  DARK SPACE COLOR PALETTE (matches backfocus.py)
 # ═══════════════════════════════════════════════════════════════════
 _C = {
-    "bg_dark":   "#101018",
-    "bg_mid":    "#181822",
-    "bg_light":  "#22222E",
-    "fg_main":   "#D0D0DA",
-    "fg_dim":    "#706880",
-    "fg_bright": "#EDE8F2",
-    "accent_teal":   "#72C4B8",
-    "accent_green":  "#88C8A0",
-    "accent_red":    "#D08070",
-    "accent_orange": "#D4A870",
-    "accent_purple": "#B08AD8",
-    "border":    "#302838",
-    "btn_bg":    "#262630",
-    "btn_hover": "#38304A",
+    "bg_dark":   "#1A1A2A",
+    "bg_mid":    "#222234",
+    "bg_light":  "#2C2C40",
+    "fg_main":   "#D8D8E4",
+    "fg_dim":    "#807896",
+    "fg_bright": "#F2EEF8",
+    "accent_teal":   "#80D8CC",
+    "accent_green":  "#96DCAE",
+    "accent_red":    "#E08878",
+    "accent_orange": "#E4B878",
+    "accent_purple": "#C09AE8",
+    "border":    "#403850",
+    "btn_bg":    "#303044",
+    "btn_hover": "#484060",
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -773,6 +793,69 @@ def classify_backfocus_error(star_fits, center):
     }
 
 
+def compute_mosaic_tiles(data, star_fits, image_shape, tile_fraction=None):
+    """Compute 9 mosaic tiles (3×3) with star filtering and mean FWHM.
+
+    Returns list of 9 dicts in reading order (TL, T, TR, L, C, R, BL, B, BR).
+    """
+    if tile_fraction is None:
+        tile_fraction = ANALYSIS_DEFAULTS["mosaic_tile_fraction"]
+
+    h, w = image_shape
+    th = int(h * tile_fraction)
+    tw = int(w * tile_fraction)
+
+    # 9 tile definitions: (name_key, row, col, center_y, center_x)
+    tile_defs = [
+        ("tile_top_left",  0, 0, th // 2,       tw // 2),
+        ("tile_top",       0, 1, th // 2,       w // 2),
+        ("tile_top_right", 0, 2, th // 2,       w - tw // 2),
+        ("tile_left",      1, 0, h // 2,        tw // 2),
+        ("tile_center",    1, 1, h // 2,        w // 2),
+        ("tile_right",     1, 2, h // 2,        w - tw // 2),
+        ("tile_bot_left",  2, 0, h - th // 2,   tw // 2),
+        ("tile_bottom",    2, 1, h - th // 2,   w // 2),
+        ("tile_bot_right", 2, 2, h - th // 2,   w - tw // 2),
+    ]
+
+    tiles = []
+    for name_key, row, col, cy, cx in tile_defs:
+        y0 = max(0, cy - th // 2)
+        y1 = min(h, y0 + th)
+        x0 = max(0, cx - tw // 2)
+        x1 = min(w, x0 + tw)
+
+        crop = data[y0:y1, x0:x1]
+
+        # Filter stars inside this tile
+        tile_stars = []
+        star_xy_local = []
+        for s in star_fits:
+            sx, sy = s["x"], s["y"]
+            if x0 <= sx < x1 and y0 <= sy < y1:
+                tile_stars.append(s)
+                star_xy_local.append((sx - x0, sy - y0))
+
+        mean_fwhm = None
+        if tile_stars:
+            mean_fwhm = np.mean([s["fwhm_geom"] for s in tile_stars])
+
+        tiles.append({
+            "name_key": name_key,
+            "row": row,
+            "col": col,
+            "crop": crop,
+            "crop_bounds": (y0, y1, x0, x1),
+            "stars": tile_stars,
+            "star_xy_local": star_xy_local,
+            "mean_fwhm": mean_fwhm,
+            "star_count": len(tile_stars),
+            "is_center": (row == 1 and col == 1),
+        })
+
+    return tiles
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  UI WINDOW
 # ═══════════════════════════════════════════════════════════════════
@@ -811,6 +894,7 @@ class FITSAnalyzerWindow:
         import matplotlib.pyplot as plt
         plt.close(self._fig_fwhm)
         plt.close(self._fig_vec)
+        plt.close(self._fig_mosaic)
         self.win.destroy()
 
     # ── Build UI ──
@@ -824,8 +908,8 @@ class FITSAnalyzerWindow:
 
         # ── Experimental banner ──
         banner = tk.Label(self.win, text=self.t("experimental"),
-                          bg="#3A2820", fg=_C["accent_orange"],
-                          font=("Segoe UI", 10, "bold"), pady=6,
+                          bg="#483828", fg=_C["accent_orange"],
+                          font=(FONT_FAMILY, 10, "bold"), pady=6,
                           anchor=tk.CENTER)
         banner.pack(fill=tk.X, padx=6, pady=(6, 0))
 
@@ -836,7 +920,7 @@ class FITSAnalyzerWindow:
         btn_style = {"bg": _C["btn_bg"], "fg": _C["fg_main"],
                      "activebackground": _C["btn_hover"], "activeforeground": _C["fg_bright"],
                      "relief": "flat", "bd": 0, "padx": 10, "pady": 4,
-                     "font": ("Segoe UI", 9)}
+                     "font": (FONT_FAMILY, 9)}
 
         self._btn_browse = tk.Button(toolbar, text=self.t("browse"), command=self._load_file, **btn_style)
         self._btn_browse.pack(side=tk.LEFT, padx=(4, 2))
@@ -855,24 +939,24 @@ class FITSAnalyzerWindow:
         sep.pack(side=tk.LEFT)
 
         tk.Label(toolbar, text=self.t("fwhm_est"), bg=_C["bg_mid"],
-                 fg=_C["fg_main"], font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(8, 2))
+                 fg=_C["fg_main"], font=(FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(8, 2))
         self._var_fwhm = tk.StringVar(value=str(ANALYSIS_DEFAULTS["fwhm_est"]))
         self._ent_fwhm = tk.Entry(toolbar, textvariable=self._var_fwhm, width=5,
                                   bg=_C["bg_light"], fg=_C["fg_bright"],
                                   insertbackground=_C["fg_bright"], relief="flat",
-                                  font=("Segoe UI", 9))
+                                  font=(FONT_FAMILY, 9))
         self._ent_fwhm.pack(side=tk.LEFT, padx=2)
         self._tip(self._ent_fwhm,
                   "Estimated star FWHM in pixels (auto-adjusted if detection fails)",
                   "FWHM estim\u00e9 des \u00e9toiles en pixels (ajust\u00e9 auto si d\u00e9tection \u00e9choue)")
 
         tk.Label(toolbar, text=self.t("threshold"), bg=_C["bg_mid"],
-                 fg=_C["fg_main"], font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(12, 2))
+                 fg=_C["fg_main"], font=(FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(12, 2))
         self._var_thresh = tk.StringVar(value=str(ANALYSIS_DEFAULTS["threshold"]))
         self._ent_thresh = tk.Entry(toolbar, textvariable=self._var_thresh, width=5,
                                     bg=_C["bg_light"], fg=_C["fg_bright"],
                                     insertbackground=_C["fg_bright"], relief="flat",
-                                    font=("Segoe UI", 9))
+                                    font=(FONT_FAMILY, 9))
         self._ent_thresh.pack(side=tk.LEFT, padx=2)
         self._tip(self._ent_thresh,
                   "Detection threshold in sigma above background (lower = more stars)",
@@ -880,36 +964,50 @@ class FITSAnalyzerWindow:
 
         # File label on right
         self._file_label = tk.Label(toolbar, text=self.t("no_file"), bg=_C["bg_mid"],
-                                    fg=_C["fg_dim"], font=("Segoe UI", 8),
+                                    fg=_C["fg_dim"], font=(FONT_FAMILY, 8),
                                     anchor=tk.E)
         self._file_label.pack(side=tk.RIGHT, padx=6, fill=tk.X, expand=True)
 
-        # ── Plots area ──
-        plots_frame = tk.Frame(self.win, bg=_C["bg_dark"])
-        plots_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=3)
+        # ── Plots area (tabbed notebook) ──
+        style = ttk.Style()
+        style.configure("FITS.TNotebook", background=_C["bg_dark"], borderwidth=0)
+        style.configure("FITS.TNotebook.Tab",
+                        background=_C["btn_bg"], foreground=_C["fg_main"],
+                        padding=[10, 4], font=(FONT_FAMILY, 9))
+        style.map("FITS.TNotebook.Tab",
+                  background=[("selected", _C["bg_mid"])],
+                  foreground=[("selected", _C["fg_bright"])])
 
-        # FWHM map (left)
-        self._fig_fwhm = Figure(figsize=(5.5, 4.2), dpi=100, facecolor=_C["bg_dark"])
-        self._ax_fwhm = self._fig_fwhm.add_subplot(111)
-        self._canvas_fwhm = FigureCanvasTkAgg(self._fig_fwhm, master=plots_frame)
-        self._canvas_fwhm.get_tk_widget().configure(bg=_C["bg_dark"], highlightthickness=0)
-        self._canvas_fwhm.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 3))
+        # ── Bottom panels (packed FIRST so they're never clipped) ──
 
-        # Vector field (right)
-        self._fig_vec = Figure(figsize=(5.5, 4.2), dpi=100, facecolor=_C["bg_dark"])
-        self._ax_vec = self._fig_vec.add_subplot(111)
-        self._canvas_vec = FigureCanvasTkAgg(self._fig_vec, master=plots_frame)
-        self._canvas_vec.get_tk_widget().configure(bg=_C["bg_dark"], highlightthickness=0)
-        self._canvas_vec.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(3, 0))
+        # ── Progress bar ──
+        prog_frame = tk.Frame(self.win, bg=_C["bg_dark"])
+        prog_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(0, 6))
 
-        self._setup_empty_axes()
+        self._progress_var = tk.DoubleVar(value=0)
+        style_pb = ttk.Style()
+        style_pb.configure("FITS.Horizontal.TProgressbar",
+                        troughcolor=_C["bg_light"],
+                        background=_C["accent_teal"],
+                        darkcolor=_C["accent_teal"],
+                        lightcolor=_C["accent_teal"],
+                        bordercolor=_C["border"])
+        self._progressbar = ttk.Progressbar(prog_frame, variable=self._progress_var,
+                                            maximum=100, mode="determinate",
+                                            style="FITS.Horizontal.TProgressbar")
+        self._progressbar.pack(fill=tk.X, side=tk.LEFT, expand=True, padx=(0, 8))
+
+        self._status_label = tk.Label(prog_frame, text="", bg=_C["bg_dark"],
+                                      fg=_C["fg_dim"], font=(FONT_FAMILY, 8),
+                                      anchor=tk.W, width=30)
+        self._status_label.pack(side=tk.LEFT)
 
         # ── Diagnostics text ──
         diag_frame = tk.Frame(self.win, bg=_C["bg_mid"], bd=0, highlightthickness=0)
-        diag_frame.pack(fill=tk.X, padx=6, pady=(3, 2))
+        diag_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=(3, 2))
 
         self._diag_text = tk.Text(diag_frame, height=6, bg=_C["bg_mid"],
-                                  fg=_C["fg_main"], font=("Consolas", 9),
+                                  fg=_C["fg_main"], font=(FONT_MONO, 9),
                                   relief="flat", bd=0, wrap=tk.WORD,
                                   state=tk.DISABLED, cursor="arrow",
                                   selectbackground=_C["bg_light"])
@@ -922,27 +1020,47 @@ class FITSAnalyzerWindow:
         self._diag_text.tag_configure("dim", foreground=_C["fg_dim"])
         self._diag_text.tag_configure("accent", foreground=_C["accent_teal"])
 
-        # ── Progress bar ──
-        prog_frame = tk.Frame(self.win, bg=_C["bg_dark"])
-        prog_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
-
-        self._progress_var = tk.DoubleVar(value=0)
+        # ── Plots area (tabbed notebook — fills remaining space) ──
         style = ttk.Style()
-        style.configure("FITS.Horizontal.TProgressbar",
-                        troughcolor=_C["bg_light"],
-                        background=_C["accent_teal"],
-                        darkcolor=_C["accent_teal"],
-                        lightcolor=_C["accent_teal"],
-                        bordercolor=_C["border"])
-        self._progressbar = ttk.Progressbar(prog_frame, variable=self._progress_var,
-                                            maximum=100, mode="determinate",
-                                            style="FITS.Horizontal.TProgressbar")
-        self._progressbar.pack(fill=tk.X, side=tk.LEFT, expand=True, padx=(0, 8))
+        style.configure("FITS.TNotebook", background=_C["bg_dark"], borderwidth=0)
+        style.configure("FITS.TNotebook.Tab",
+                        background=_C["btn_bg"], foreground=_C["fg_main"],
+                        padding=[10, 4], font=(FONT_FAMILY, 9))
+        style.map("FITS.TNotebook.Tab",
+                  background=[("selected", _C["bg_mid"])],
+                  foreground=[("selected", _C["fg_bright"])])
 
-        self._status_label = tk.Label(prog_frame, text="", bg=_C["bg_dark"],
-                                      fg=_C["fg_dim"], font=("Segoe UI", 8),
-                                      anchor=tk.W, width=30)
-        self._status_label.pack(side=tk.LEFT)
+        self._notebook = ttk.Notebook(self.win, style="FITS.TNotebook")
+        self._notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=3)
+
+        # ── Tab 1: Analysis (FWHM map + Vector field) ──
+        tab_analysis = tk.Frame(self._notebook, bg=_C["bg_dark"])
+        self._notebook.add(tab_analysis, text=self.t("tab_analysis"))
+
+        # FWHM map (left)
+        self._fig_fwhm = Figure(figsize=(5.5, 4.2), dpi=100, facecolor=_C["bg_dark"])
+        self._ax_fwhm = self._fig_fwhm.add_subplot(111)
+        self._canvas_fwhm = FigureCanvasTkAgg(self._fig_fwhm, master=tab_analysis)
+        self._canvas_fwhm.get_tk_widget().configure(bg=_C["bg_dark"], highlightthickness=0)
+        self._canvas_fwhm.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 3))
+
+        # Vector field (right)
+        self._fig_vec = Figure(figsize=(5.5, 4.2), dpi=100, facecolor=_C["bg_dark"])
+        self._ax_vec = self._fig_vec.add_subplot(111)
+        self._canvas_vec = FigureCanvasTkAgg(self._fig_vec, master=tab_analysis)
+        self._canvas_vec.get_tk_widget().configure(bg=_C["bg_dark"], highlightthickness=0)
+        self._canvas_vec.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(3, 0))
+
+        # ── Tab 2: Mosaic 3×3 ──
+        tab_mosaic = tk.Frame(self._notebook, bg=_C["bg_dark"])
+        self._notebook.add(tab_mosaic, text=self.t("tab_mosaic"))
+
+        self._fig_mosaic = Figure(figsize=(5.5, 4.2), dpi=100, facecolor=_C["bg_dark"])
+        self._canvas_mosaic = FigureCanvasTkAgg(self._fig_mosaic, master=tab_mosaic)
+        self._canvas_mosaic.get_tk_widget().configure(bg=_C["bg_dark"], highlightthickness=0)
+        self._canvas_mosaic.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        self._setup_empty_axes()
 
     def _setup_empty_axes(self):
         """Set up dark-themed empty axes."""
@@ -958,9 +1076,22 @@ class FITSAnalyzerWindow:
         self._canvas_fwhm.draw()
         self._canvas_vec.draw()
 
+        # Empty mosaic placeholder
+        self._fig_mosaic.clf()
+        for idx in range(9):
+            ax = self._fig_mosaic.add_subplot(3, 3, idx + 1)
+            ax.set_facecolor(_C["bg_dark"])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_color(_C["border"])
+        self._fig_mosaic.tight_layout()
+        self._canvas_mosaic.draw()
+
     # ── File loading ──
     def _load_file(self):
-        self.win.attributes("-topmost", True)
+        try: self.win.attributes("-topmost", True)
+        except tk.TclError: pass
         fp = filedialog.askopenfilename(
             parent=self.win,
             title=self.t("browse"),
@@ -970,7 +1101,8 @@ class FITSAnalyzerWindow:
                        ("Compressed FITS", "*.fits.fz *.fit.fz *.FITS.fz *.FIT.fz"),
                        ("XISF files", "*.xisf *.XISF"),
                        ("All files", "*.*")])
-        self.win.attributes("-topmost", False)
+        try: self.win.attributes("-topmost", False)
+        except tk.TclError: pass
         self.win.lift()
         self.win.focus_force()
         if not fp:
@@ -1117,6 +1249,7 @@ class FITSAnalyzerWindow:
         r = self._results
         self._draw_fwhm_map(r)
         self._draw_vector_field(r)
+        self._draw_mosaic(r)
         self._update_diagnostics(r)
 
     def _draw_fwhm_map(self, results):
@@ -1244,6 +1377,81 @@ class FITSAnalyzerWindow:
 
         self._fig_vec.tight_layout()
         self._canvas_vec.draw()
+
+    def _draw_mosaic(self, results):
+        """Draw 3×3 mosaic of image tiles with star markers and FWHM annotations."""
+        self._fig_mosaic.clf()
+
+        fitted = results["star_fits"]
+        h, w = results["image_shape"]
+        tiles = compute_mosaic_tiles(self._data, fitted, (h, w))
+
+        # Get center FWHM for relative coloring
+        center_fwhm = None
+        for tile in tiles:
+            if tile["is_center"] and tile["mean_fwhm"] is not None:
+                center_fwhm = tile["mean_fwhm"]
+                break
+
+        for tile in tiles:
+            idx = tile["row"] * 3 + tile["col"] + 1
+            ax = self._fig_mosaic.add_subplot(3, 3, idx)
+            ax.set_facecolor(_C["bg_dark"])
+
+            crop = tile["crop"]
+
+            # Auto-stretch with percentiles
+            p1 = np.percentile(crop, 1)
+            p99 = np.percentile(crop, 99.5)
+            ax.imshow(crop, cmap="gray", vmin=p1, vmax=p99,
+                      origin="lower", aspect="equal")
+
+            # Star circles
+            if tile["star_xy_local"]:
+                sx = [xy[0] for xy in tile["star_xy_local"]]
+                sy = [xy[1] for xy in tile["star_xy_local"]]
+                ax.scatter(sx, sy, s=60, facecolors="none",
+                           edgecolors=_C["accent_teal"], linewidths=0.8,
+                           zorder=5)
+
+            # Title
+            ax.set_title(self.t(tile["name_key"]),
+                         color=_C["fg_main"], fontsize=8, pad=3)
+
+            # FWHM annotation
+            if tile["mean_fwhm"] is not None:
+                label = (self.t("tile_fwhm", v=tile["mean_fwhm"]) +
+                         " | " + self.t("tile_stars", n=tile["star_count"]))
+            else:
+                label = self.t("tile_no_stars")
+            ax.text(0.5, 0.03, label, transform=ax.transAxes,
+                    ha="center", va="bottom", fontsize=7,
+                    color=_C["fg_bright"],
+                    bbox=dict(boxstyle="round,pad=0.2",
+                              facecolor=_C["bg_dark"], alpha=0.75,
+                              edgecolor="none"))
+
+            # Border color by FWHM quality relative to center
+            border_color = _C["border"]
+            if center_fwhm is not None and tile["mean_fwhm"] is not None:
+                ratio = tile["mean_fwhm"] / center_fwhm
+                if ratio <= 1.05:
+                    border_color = _C["accent_green"]
+                elif ratio <= 1.20:
+                    border_color = _C["accent_teal"]
+                elif ratio <= 1.40:
+                    border_color = _C["accent_orange"]
+                else:
+                    border_color = _C["accent_red"]
+
+            for spine in ax.spines.values():
+                spine.set_color(border_color)
+                spine.set_linewidth(2)
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        self._fig_mosaic.tight_layout(pad=1.5)
+        self._canvas_mosaic.draw()
 
     def _update_diagnostics(self, results):
         """Update the diagnostics text panel with analysis results."""

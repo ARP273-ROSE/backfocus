@@ -71,6 +71,7 @@ Telescope, Refractor, Camera Lens, Astro Camera, DSLR/Mirrorless, Eyepiece, Barl
 - Automatically **detect stars** and fit elliptical 2D Gaussians on each one
 - Build a **FWHM map** (polynomial surface) showing focus quality across the field
 - Display a **vector field** of star elongation directions (radial vs tangential)
+- **Mosaic 3×3** view: visual inspection of star quality in 9 regions (corners, edges, center) with color-coded FWHM borders — inspired by Ekos Aberration Inspector
 - **Diagnose backfocus errors**: radial elongation = too short, tangential = too long
 - RGB images auto-converted to luminance, large images auto-binned 2x2
 - Threaded analysis with progress bar
