@@ -7,7 +7,9 @@ Light convention: Telescope (left) → Camera (right).
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import json, os, sys, copy, itertools, math, random, bisect
+import json, os, sys, copy, itertools, math, random, bisect, threading
+
+VERSION = "1.1.0"
 
 # ═══════════════════════════════════════════════════════════════════
 #  TRANSLATIONS
@@ -190,6 +192,21 @@ TR = {
     "fits_analyzer_missing_deps": {
         "en": "The FITS analyzer requires additional packages.\n\nRun:\n  pip install numpy scipy astropy photutils matplotlib\n\nOr relaunch with launch.bat / launch.sh to install automatically.",
         "fr": "L'analyseur FITS nécessite des paquets supplémentaires.\n\nExécutez :\n  pip install numpy scipy astropy photutils matplotlib\n\nOu relancez avec launch.bat / launch.sh pour installer automatiquement."},
+    # ── auto-update ──
+    "check_updates":     {"en": "Check for Updates…", "fr": "Vérifier les mises à jour…"},
+    "update_available":  {"en": "Update Available", "fr": "Mise à jour disponible"},
+    "update_title":      {"en": "Update Available", "fr": "Mise à jour disponible"},
+    "update_current":    {"en": "Current version: v{current}", "fr": "Version actuelle : v{current}"},
+    "update_new":        {"en": "New version: v{new}", "fr": "Nouvelle version : v{new}"},
+    "update_changelog":  {"en": "Changelog:", "fr": "Changements :"},
+    "update_download":   {"en": "Download && Install", "fr": "Télécharger et installer"},
+    "update_skip":       {"en": "Skip", "fr": "Ignorer"},
+    "update_downloading":{"en": "Downloading update…", "fr": "Téléchargement de la mise à jour…"},
+    "update_installing": {"en": "Installing update…", "fr": "Installation de la mise à jour…"},
+    "update_restarting": {"en": "Restarting…", "fr": "Redémarrage…"},
+    "update_error":      {"en": "Update failed: {err}", "fr": "Échec de la mise à jour : {err}"},
+    "update_up_to_date": {"en": "You are up to date (v{version}).", "fr": "Vous êtes à jour (v{version})."},
+    "update_no_connection":{"en": "Could not reach GitHub.\nCheck your internet connection.", "fr": "Impossible de joindre GitHub.\nVérifiez votre connexion internet."},
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -303,7 +320,8 @@ TYPE_COLORS = {
 #  HELPERS
 # ═══════════════════════════════════════════════════════════════════
 def _center_dlg(dlg, parent):
-    """Center a dialog on its parent after geometry is set."""
+    """Center a dialog on its parent, without visible flash."""
+    dlg.withdraw()            # hide before computing position
     dlg.update_idletasks()
     pw, ph = parent.winfo_width(), parent.winfo_height()
     px, py = parent.winfo_rootx(), parent.winfo_rooty()
@@ -311,6 +329,7 @@ def _center_dlg(dlg, parent):
     x = px + (pw - dw) // 2
     y = py + (ph - dh) // 2
     dlg.geometry(f"+{max(0,x)}+{max(0,y)}")
+    dlg.deiconify()           # show at final position
 
 def _bind_dlg_keys(dlg, ok_func=None):
     """Bind Escape to close and Enter to confirm on a dialog."""
@@ -343,6 +362,90 @@ def save_data(data):
             json.dump(data, fh, indent=2, ensure_ascii=False)
     except OSError:
         pass
+
+# ═══════════════════════════════════════════════════════════════════
+#  AUTO-UPDATE HELPERS
+# ═══════════════════════════════════════════════════════════════════
+_UPDATE_REPO = "ARP273-ROSE/backfocus"
+_UPDATE_FILE_WHITELIST = {
+    "backfocus.py", "fits_analyzer.py", "reference_data.py", "gen_refdb.py",
+    "test_audit.py", "launch.bat", "launch.sh", "requirements.txt",
+    "README.md", ".gitattributes", ".gitignore",
+}
+_UPDATE_DIR_WHITELIST = {"manual"}
+
+def _parse_version(tag):
+    """Parse 'v1.2.3' or '1.2.3' into (1, 2, 3) tuple for comparison."""
+    s = tag.strip().lstrip("vV")
+    parts = []
+    for p in s.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+def _check_for_update():
+    """Check GitHub for a newer release. Returns dict, 'up_to_date', or None."""
+    try:
+        import urllib.request, json as _json
+        url = f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest"
+        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
+                                                   "User-Agent": "BackfocusCalculator"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode())
+        tag = data.get("tag_name", "")
+        if not tag:
+            return "up_to_date"
+        remote = _parse_version(tag)
+        local = _parse_version(VERSION)
+        if remote > local:
+            return {"tag": tag, "version": tag.lstrip("vV"),
+                    "body": data.get("body", ""), "zipball_url": data.get("zipball_url", "")}
+        return "up_to_date"
+    except urllib.request.HTTPError as e:
+        if e.code == 404:
+            return "up_to_date"
+        return None
+    except Exception:
+        return None
+
+def _download_and_apply_update(zipball_url):
+    """Download zipball, extract whitelisted files over the install directory."""
+    import urllib.request, zipfile, tempfile, shutil
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    tmp_zip = os.path.join(tempfile.gettempdir(), "backfocus_update.zip")
+    tmp_dir = os.path.join(tempfile.gettempdir(), "backfocus_update_extracted")
+    try:
+        # download
+        req = urllib.request.Request(zipball_url, headers={"User-Agent": "BackfocusCalculator"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            with open(tmp_zip, "wb") as f:
+                f.write(resp.read())
+        # extract
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir)
+        with zipfile.ZipFile(tmp_zip) as zf:
+            zf.extractall(tmp_dir)
+        # find the single sub-folder GitHub creates (e.g. ARP273-ROSE-backfocus-abc1234/)
+        entries = os.listdir(tmp_dir)
+        src_root = os.path.join(tmp_dir, entries[0]) if len(entries) == 1 else tmp_dir
+        # copy whitelisted files
+        for fname in os.listdir(src_root):
+            src_path = os.path.join(src_root, fname)
+            dst_path = os.path.join(app_dir, fname)
+            if os.path.isfile(src_path) and fname in _UPDATE_FILE_WHITELIST:
+                shutil.copy2(src_path, dst_path)
+            elif os.path.isdir(src_path) and fname in _UPDATE_DIR_WHITELIST:
+                if os.path.isdir(dst_path):
+                    shutil.rmtree(dst_path)
+                shutil.copytree(src_path, dst_path)
+    finally:
+        # cleanup
+        if os.path.isfile(tmp_zip):
+            os.remove(tmp_zip)
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 def _merge_reference_db(data):
     """Merge missing REFERENCE_DB entries, update specs, purge removed entries."""
@@ -451,8 +554,10 @@ class Tooltip:
 # ═══════════════════════════════════════════════════════════════════
 class GalaxyCursor:
     SIZE = 22
+    POLL_MS = 32   # ~30 fps — smooth enough for a cursor follower
     def __init__(self, root):
         self.root = root
+        self._paused = False
         self.win = tk.Toplevel(root); self.win.overrideredirect(True)
         try: self.win.attributes("-topmost", True)
         except tk.TclError: pass
@@ -473,6 +578,16 @@ class GalaxyCursor:
         self.win.geometry(f"{self.SIZE}x{self.SIZE}+0+0")
         # Use polling timer so galaxy follows mouse across ALL windows
         self._poll()
+
+    def pause(self):
+        self._paused = True
+        try: self.win.withdraw()
+        except tk.TclError: pass
+
+    def resume(self):
+        self._paused = False
+        try: self.win.deiconify()
+        except tk.TclError: pass
 
     def _draw(self):
         S = self.SIZE; cx, cy = S/2, S/2
@@ -520,13 +635,14 @@ class GalaxyCursor:
         c.create_image(0, 0, image=img, anchor="nw")
 
     def _poll(self):
-        try:
-            x = self.root.winfo_pointerx()+10
-            y = self.root.winfo_pointery()+10
-            self.win.geometry(f"+{x}+{y}"); self.win.lift()
-        except Exception:
-            pass
-        self.root.after(16, self._poll)  # ~60fps
+        if not self._paused:
+            try:
+                x = self.root.winfo_pointerx()+10
+                y = self.root.winfo_pointery()+10
+                self.win.geometry(f"+{x}+{y}"); self.win.lift()
+            except Exception:
+                pass
+        self.root.after(self.POLL_MS, self._poll)
 
 # ═══════════════════════════════════════════════════════════════════
 #  HELP WINDOW
@@ -554,7 +670,7 @@ def open_help(parent, lang="en"):
     def b(s): txt.insert(tk.END,"  \u2022 "+s+"\n","bullet")
 
     if lang == "fr":
-        h("Calculateur de Backfocus v1 \u2014 Guide complet")
+        h(f"Calculateur de Backfocus v{VERSION} \u2014 Guide complet")
         p("Bienvenue ! Cette application vous aide \u00e0 concevoir et v\u00e9rifier vos trains optiques pour l\u2019astrophotographie. Th\u00e8me sombre spatial, curseur galaxie, base de 12 000+ produits r\u00e9els.")
 
         h("1. D\u00e9marrage rapide","h2")
@@ -693,7 +809,7 @@ def open_help(parent, lang="en"):
         b("Note : l\u2019analyse mono-image donne la direction, pas l\u2019\u00e9cart pr\u00e9cis en mm.")
 
     else:
-        h("Backfocus Calculator v1 \u2014 Complete Guide")
+        h(f"Backfocus Calculator v{VERSION} \u2014 Complete Guide")
         p("Welcome! This application helps you design and verify optical trains for astrophotography. Dark space theme, galaxy cursor, 12,000+ real product database.")
 
         h("1. Quick Start","h2")
@@ -1216,10 +1332,16 @@ class App:
                 save_data(self.data)
         self._catalog_win = None
         self._fits_win = None
+        self._save_cfg_after = None
         self._apply_theme()
         self._build_ui()
         self._apply_language()
         self.galaxy = GalaxyCursor(self.root)
+        self._win_resize_after = None
+        self.root.bind("<Configure>", self._on_root_configure)
+        self._update_thread = None
+        self._update_result = None
+        self.root.after(2000, self._check_updates_startup)
 
     def t(self, key, **kw):
         e = TR.get(key, {}); s = e.get(self.lang, e.get("en", key))
@@ -1399,7 +1521,9 @@ class App:
     # ── UI skeleton ──
     def _build_ui(self):
         self.root.title(self.t("app_title"))
-        self.root.geometry("1400x920"); self.root.minsize(1050,740)
+        ui = self.data.get("ui", {})
+        geo = ui.get("window_geometry", "1400x920")
+        self.root.geometry(geo); self.root.minsize(1050,740)
         self.menu = tk.Menu(self.root, bg=C["menu_bg"], fg=C["fg_main"],
                             activebackground=C["bg_selected"], activeforeground=C["fg_bright"],
                             bd=0, relief="flat")
@@ -1430,14 +1554,20 @@ class App:
         self.fr_cfg = ttk.Frame(self.root)
         self.fr_cfg.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
         self._build_config_panel()
+        # restore saved sash positions after layout is ready
+        self.root.after(100, self._restore_sash_positions)
 
     # ═════════════════════ CONFIG PANEL ═════════════════════
     def _build_config_panel(self):
         fr = self.fr_cfg
 
+        # ── horizontal paned window: config list | editor ──
+        self.pw_h = tk.PanedWindow(fr, orient=tk.HORIZONTAL, sashwidth=6,
+                                    bg=C["separator"], bd=0, opaqueresize=True)
+        self.pw_h.pack(fill=tk.BOTH, expand=True)
+
         # ── left: config list ──
-        left = ttk.Frame(fr, width=220)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0,6)); left.pack_propagate(False)
+        left = ttk.Frame(self.pw_h)
         ttk.Label(left, text="Configurations", style="Title.TLabel").pack(pady=(6,4))
 
         bb = ttk.Frame(left); bb.pack(fill=tk.X, padx=4, pady=6)
@@ -1472,7 +1602,9 @@ class App:
         self.clist.bind("<ButtonRelease-1>", self._cfg_drag_end)
 
         # ── right: editor ──
-        right = ttk.Frame(fr); right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        right = ttk.Frame(self.pw_h)
+        self.pw_h.add(left, minsize=150, width=220)
+        self.pw_h.add(right, minsize=400)
 
         top = ttk.Frame(right); top.pack(fill=tk.X, pady=(0,6))
         self.lbl_target = ttk.Label(top, text=self.t("target_bf"))
@@ -1488,8 +1620,13 @@ class App:
         self.v_notes.trace_add("write", lambda *_: self._save_cfg())
         ttk.Entry(top, textvariable=self.v_notes, width=35).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # ── bottom (packed BEFORE mid so it's never clipped) ──
-        bot = ttk.Frame(right); bot.pack(side=tk.BOTTOM, fill=tk.X, pady=6)
+        # ── vertical paned window: treeview | diagram ──
+        self.pw_v = tk.PanedWindow(right, orient=tk.VERTICAL, sashwidth=6,
+                                    bg=C["separator"], bd=0, opaqueresize=True)
+        self.pw_v.pack(fill=tk.BOTH, expand=True)
+
+        # ── bottom: backfocus info + diagram ──
+        bot = ttk.Frame(self.pw_v)
         cf = ttk.LabelFrame(bot, text="Backfocus")
         cf.pack(side=tk.LEFT, fill=tk.BOTH, padx=(0,6))
         self.lbl_total = ttk.Label(cf, text="", style="Calc.TLabel")
@@ -1505,12 +1642,18 @@ class App:
         self._drop_highlight = False
         self._diag_ranges = []
         self._diag_drag_idx = None
+        self._last_draw_args = None
+        self._resize_after_id = None
+        self._last_canvas_size = (0, 0)
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
         self.canvas.bind("<ButtonPress-1>", self._diag_drag_start)
         self.canvas.bind("<B1-Motion>", self._diag_drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self._diag_drag_end)
 
         # ── mid (treeview — fills remaining space) ──
-        mid = ttk.Frame(right); mid.pack(fill=tk.BOTH, expand=True)
+        mid = ttk.Frame(self.pw_v)
+        self.pw_v.add(mid, minsize=120)
+        self.pw_v.add(bot, minsize=80, height=160)
 
         sf = ttk.LabelFrame(mid, text=self.t("train_label"))
         sf.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -1559,9 +1702,9 @@ class App:
              "Flip a reversible part (swap sides)","Retourner une pi\u00e8ce r\u00e9versible"),
             (None, None, None, None, None),
             ("mark_bf_start",     self._mark_bf_start,   "TButton",
-             "Mark as backfocus measurement start","Marquer comme d\u00e9but de mesure du backfocus"),
+             "BF measured from camera-side output of this part","BF mesur\u00e9 depuis la sortie c\u00f4t\u00e9 cam\u00e9ra de cette pi\u00e8ce"),
             ("mark_bf_end",       self._mark_bf_end,     "TButton",
-             "Mark as backfocus measurement end","Marquer comme fin de mesure du backfocus"),
+             "BF measured to telescope-side input of this part (sensor)","BF mesur\u00e9 jusqu\u2019\u00e0 l\u2019entr\u00e9e c\u00f4t\u00e9 t\u00e9lescope de cette pi\u00e8ce (capteur)"),
             (None, None, None, None, None),
             ("auto_suggest",      self._suggest,         "Accent.TButton",
              "Find a single part that fills the gap","Trouver une pi\u00e8ce qui comble l\u2019\u00e9cart"),
@@ -1711,6 +1854,14 @@ class App:
         try: c["target_backfocus"] = float(self.v_target.get().replace(",","."))
         except ValueError: pass
         c["notes"] = self.v_notes.get()
+        # Debounce disk write to avoid lag during typing
+        if hasattr(self, '_save_cfg_after') and self._save_cfg_after:
+            self.root.after_cancel(self._save_cfg_after)
+        self._save_cfg_after = self.root.after(300, self._save_cfg_flush)
+
+    def _save_cfg_flush(self):
+        """Actually write data to disk (debounced)."""
+        self._save_cfg_after = None
         save_data(self.data)
 
     # ── config list drag reorder ──
@@ -1790,8 +1941,8 @@ class App:
                                       eff.get("tside_thread",""), eff.get("tside_gender",""))
                     compat = "OK" if ok else "MISMATCH"
             bf_mark = ""
-            if si == bs: bf_mark = ">> START"
-            elif si == be: bf_mark = "<< END"
+            if si == bs: bf_mark = ">> BF START \u2193"
+            elif si == be: bf_mark = "\u2191 BF END <<"
             elif bs >= 0 and be >= 0 and bs < si < be: bf_mark = "\u2026"
             tags = ["odd" if si%2==0 else "even"]
             if item.get("ghost"): tags.append("ghost")
@@ -1833,7 +1984,9 @@ class App:
         if si >= len(stack): return
         p = stack[si]
         dlg = tk.Toplevel(self.root); dlg.title(self.t("edit_part"))
-        dlg.geometry("600x660"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
+        _saved = self.data.get("ui", {}).get("part_dlg_geometry", "600x740")
+        dlg.geometry(_saved); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
+        dlg.minsize(500, 500)
         dlg.configure(bg=C["bg_mid"])
         r = 0; vars_ = {}
         def _row(label, key, wf, **kw):
@@ -1906,10 +2059,13 @@ class App:
             except ValueError: nq = cat_qty
             if cat_idx is not None:
                 self.data["parts"][cat_idx]["qty"] = nq
-            save_data(self.data); self._refresh_stack(); dlg.destroy()
+            save_data(self.data); self._refresh_stack(); _close_dlg()
+        def _close_dlg():
+            self.data.setdefault("ui", {})["part_dlg_geometry"] = dlg.geometry()
+            dlg.destroy()
         bf = ttk.Frame(dlg); bf.grid(row=r, column=0, columnspan=3, pady=12)
         ttk.Button(bf, text=self.t("save"), command=_save, style="Accent.TButton").pack(side=tk.LEFT, padx=10)
-        ttk.Button(bf, text=self.t("cancel"), command=dlg.destroy).pack(side=tk.LEFT, padx=10)
+        ttk.Button(bf, text=self.t("cancel"), command=_close_dlg).pack(side=tk.LEFT, padx=10)
         _bind_dlg_keys(dlg); _center_dlg(dlg, self.root)
 
     def _stack_rm(self):
@@ -2067,7 +2223,7 @@ class App:
         W, H = c.winfo_width(), c.winfo_height()
         margin = 18; avail = W - 2*margin
         vis_total = sum(max(it.get("optical_length",0),2) for it in stack)
-        bh = 42; yt = (H - bh) / 2; rr = self._rrect
+        bh = 42; yt = (H - bh) / 2; cr = c.create_rectangle
         x = margin
         insert_x = None
         for si, item in enumerate(stack):
@@ -2079,21 +2235,20 @@ class App:
                 insert_x = x
             if is_src:
                 # draw dimmed placeholder at original position
-                rr(c, x, yt, x+bw, yt+bh, r=4, fill="", outline=C["fg_dim"],)
+                cr(x, yt, x+bw, yt+bh, fill="", outline=C["fg_dim"])
                 c.create_line(x+2, yt+bh/2, x+bw-2, yt+bh/2,
                               fill=C["fg_dim"], dash=(3,3))
             else:
                 is_ghost = item.get("ghost", False)
                 col = C["accent_orange"] if is_ghost else TYPE_COLORS.get(item.get("type",""), C["fg_dim"])
-                rad = 5 if bw > 14 else 3
                 if 0<=bs<=be and bs<si<=be:
-                    rr(c, x-1,yt-5,x+bw+1,yt+bh+5, r=rad+2,fill=C["bf_zone"],outline="")
+                    cr(x-1,yt-5,x+bw+1,yt+bh+5,fill=C["bf_zone"],outline="",width=0)
                 if is_ghost:
-                    rr(c, x,yt,x+bw,yt+bh, r=rad, fill="", outline=C["accent_orange"])
+                    cr(x,yt,x+bw,yt+bh, fill="", outline=C["accent_orange"], dash=(4,3))
                     c.create_text(x+bw/2,yt+bh/2,text="?",font=(FONT_FAMILY,12,"bold"),fill=C["accent_orange"])
                 else:
-                    rr(c, x+1,yt+1,x+bw-1,yt+bh-1, r=rad, fill=col, outline="")
-                    rr(c, x,yt,x+bw,yt+bh, r=rad, fill="", outline=C["border"])
+                    cr(x+1,yt+1,x+bw-1,yt+bh-1, fill=col, outline="", width=0)
+                    cr(x,yt,x+bw,yt+bh, fill="", outline=C["border"])
                     if bw > 24:
                         c.create_text(x+bw/2,yt+bh/2,text=item.get("name","")[:16],font=(FONT_FAMILY,7),fill=C["bg_dark"])
                 c.create_text(x+bw/2,yt+bh+12,text=f'{item.get("optical_length",0):.1f}',font=(FONT_FAMILY,7),fill=C["fg_dim"])
@@ -2117,8 +2272,7 @@ class App:
             fy = yt - 4
             is_ghost = item.get("ghost", False)
             col = C["accent_orange"] if is_ghost else TYPE_COLORS.get(item.get("type",""), C["fg_dim"])
-            rad = 5 if fw > 14 else 3
-            rr(c, fx, fy, fx+fw, fy+bh, r=rad, fill=col, outline=C["accent_green"])
+            cr(fx, fy, fx+fw, fy+bh, fill=col, outline=C["accent_green"])
             if fw > 24:
                 c.create_text(fx+fw/2, fy+bh/2, text=item.get("name","")[:16],
                               font=(FONT_FAMILY,7,"bold"), fill=C["fg_bright"])
@@ -2554,7 +2708,9 @@ class App:
             "reversible":True,"bf_role":"","qty":0,"notes":""}
         dlg = tk.Toplevel(self.root)
         dlg.title(self.t("edit_part") if is_edit else self.t("add_part"))
-        dlg.geometry("600x660"); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
+        _saved = self.data.get("ui", {}).get("part_dlg_geometry", "600x740")
+        dlg.geometry(_saved); dlg.transient(self.root); dlg.wait_visibility(); dlg.grab_set()
+        dlg.minsize(500, 500)
         dlg.configure(bg=C["bg_mid"])
         r = 0; vars_ = {}
         def _row(label, key, wf, **kw):
@@ -2658,10 +2814,13 @@ class App:
             else: self.data["parts"].append(np)
             save_data(self.data)
             if on_done: on_done()
+            _close_dlg()
+        def _close_dlg():
+            self.data.setdefault("ui", {})["part_dlg_geometry"] = dlg.geometry()
             dlg.destroy()
         bf = ttk.Frame(dlg); bf.grid(row=r, column=0, columnspan=3, pady=12)
         ttk.Button(bf, text=self.t("save"), command=_save, style="Accent.TButton").pack(side=tk.LEFT, padx=10)
-        ttk.Button(bf, text=self.t("cancel"), command=dlg.destroy).pack(side=tk.LEFT, padx=10)
+        ttk.Button(bf, text=self.t("cancel"), command=_close_dlg).pack(side=tk.LEFT, padx=10)
         _bind_dlg_keys(dlg); _center_dlg(dlg, self.root)
 
     # ── calc ──
@@ -2677,7 +2836,13 @@ class App:
         bf_total = sum(stack[j].get("optical_length",0) for j in range(bs+1,be+1)) if 0<=bs<=be<len(stack) else total
         diff = bf_total - target
         self.lbl_total.config(text=f'{self.t("total_label")} {_fmt_len(total,lu)}')
-        self.lbl_bf.config(text=f'{self.t("bf_total_label")} {_fmt_len(bf_total,lu)}')
+        if 0 <= bs <= be < len(stack):
+            start_name = stack[bs].get("name", "?")[:20]
+            end_name = stack[be].get("name", "?")[:20]
+            bf_text = f'{self.t("bf_total_label")} {_fmt_len(bf_total,lu)}  ({start_name} \u2192 {end_name})'
+        else:
+            bf_text = f'{self.t("bf_total_label")} {_fmt_len(bf_total,lu)}'
+        self.lbl_bf.config(text=bf_text)
         if abs(diff) < 0.1:
             self.lbl_diff.config(text=f'{self.t("diff_label")} {self.t("status_ok")}', foreground=C["accent_green"])
         elif diff > 0:
@@ -2695,13 +2860,50 @@ class App:
                x1,y2, x1,y2-r, x1,y1+r, x1,y1, x1+r,y1]
         return c.create_polygon(pts, smooth=True, **kw)
 
+    def _on_root_configure(self, event):
+        """Pause expensive work during window resize."""
+        if event.widget is not self.root:
+            return
+        # Pause galaxy cursor overlay during resize
+        self.galaxy.pause()
+        if self._win_resize_after:
+            self.root.after_cancel(self._win_resize_after)
+        self._win_resize_after = self.root.after(200, self._on_resize_done)
+
+    def _on_resize_done(self):
+        """Resume normal operation after window resize ends."""
+        self._win_resize_after = None
+        self.galaxy.resume()
+
+    def _on_canvas_resize(self, event):
+        """Redraw diagram when canvas is resized."""
+        if self._last_draw_args is None:
+            return
+        w, h = event.width, event.height
+        if (w, h) == self._last_canvas_size:
+            return  # no actual size change
+        self._last_canvas_size = (w, h)
+        # Debounce: cancel pending redraw, schedule a new one
+        if self._resize_after_id:
+            self.canvas.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.canvas.after(80, self._redraw_from_cache)
+
+    def _redraw_from_cache(self):
+        """Redraw using cached arguments."""
+        self._resize_after_id = None
+        if self._last_draw_args:
+            self._draw(*self._last_draw_args)
+
     def _draw(self, stack, bf_total, target, bs, be):
-        c = self.canvas; c.delete("all"); c.update_idletasks()
+        self._last_draw_args = (stack, bf_total, target, bs, be)
+        c = self.canvas
         W, H = c.winfo_width(), c.winfo_height()
-        if W < 50:
+        if W < 50 or H < 10:
             # Canvas not laid out yet — reschedule
             c.after(50, lambda: self._draw(stack, bf_total, target, bs, be))
             return
+        # Batch: suppress redraws until all items are placed
+        c.delete("all")
         self._diag_ranges = []
         if not stack:
             c.create_text(W/2,H/2,text="\u2014",fill=C["fg_dim"],font=(FONT_FAMILY,10)); return
@@ -2713,23 +2915,21 @@ class App:
         else:
             ref = vis_total  # fallback: no target defined, fill space as before
         x = margin; bh = 42; yt = (H-bh)/2
-        rr = self._rrect
+        cr = c.create_rectangle
         for si, item in enumerate(stack):
             ol = max(item.get("optical_length",0),2)
             bw = max(ol/ref*avail,8) if ref>0 else 12
             is_ghost = item.get("ghost", False)
             col = C["accent_orange"] if is_ghost else TYPE_COLORS.get(item.get("type",""), C["fg_dim"])
-            rad = 5 if bw > 14 else 3
             if 0<=bs<=be and bs<si<=be:
-                rr(c, x-1,yt-5,x+bw+1,yt+bh+5, r=rad+2,
-                   fill=C["bf_zone"], outline="")
+                cr(x-1,yt-5,x+bw+1,yt+bh+5,
+                   fill=C["bf_zone"], outline="", width=0)
             if is_ghost:
-                # Dashed outline, no fill
-                rr(c, x,yt,x+bw,yt+bh, r=rad, fill="", outline=C["accent_orange"])
+                cr(x,yt,x+bw,yt+bh, fill="", outline=C["accent_orange"], dash=(4,3))
                 c.create_text(x+bw/2,yt+bh/2,text="?",font=(FONT_FAMILY,12,"bold"),fill=C["accent_orange"])
             else:
-                rr(c, x+1,yt+1,x+bw-1,yt+bh-1, r=rad, fill=col, outline="")
-                rr(c, x,yt,x+bw,yt+bh, r=rad, fill="", outline=C["border"])
+                cr(x+1,yt+1,x+bw-1,yt+bh-1, fill=col, outline="", width=0)
+                cr(x,yt,x+bw,yt+bh, fill="", outline=C["border"])
                 if bw > 24:
                     c.create_text(x+bw/2,yt+bh/2,text=item.get("name","")[:16],font=(FONT_FAMILY,7),fill=C["bg_dark"])
             c.create_text(x+bw/2,yt+bh+12,text=f'{item.get("optical_length",0):.1f}',font=(FONT_FAMILY,7),fill=C["fg_dim"])
@@ -2737,6 +2937,14 @@ class App:
             x += bw
         c.create_text(margin,yt-12,text="Telescope",font=(FONT_FAMILY,7),fill=C["fg_dim"],anchor=tk.W)
         c.create_text(W-margin,yt-12,text="Camera",font=(FONT_FAMILY,7),fill=C["fg_dim"],anchor=tk.E)
+        if 0 <= bs <= be and len(self._diag_ranges) > max(bs, be):
+            bx1 = self._diag_ranges[bs][1]   # right edge of BF start piece
+            bx2 = self._diag_ranges[be][0]   # left edge of BF end piece
+            mid = (bx1 + bx2) / 2
+            c.create_text(mid, yt - 12, text="BF", font=(FONT_FAMILY, 8, "bold"),
+                          fill=C["accent_green"])
+            c.create_line(bx1, yt - 8, bx2, yt - 8, fill=C["accent_green"],
+                          width=1, dash=(3, 2))
         if target > 0 and ref > 0:
             tx = margin + (target/ref)*avail
             if margin < tx < W-margin:
@@ -3026,6 +3234,8 @@ class App:
         hm.add_command(label=self.t("about"), command=self._about)
         hm.add_separator()
         hm.add_command(label=self.t("report_bug"), command=self._report_bug)
+        hm.add_separator()
+        hm.add_command(label=self.t("check_updates"), command=self._check_updates_manual)
         self.menu.add_cascade(label=self.t("help_menu"), menu=hm)
 
         lm = tk.Menu(self.menu, tearoff=0, **mo)
@@ -3052,7 +3262,7 @@ class App:
 
     def _about(self):
         messagebox.showinfo(self.t("about"),
-            "Backfocus Calculator v1\n\n"
+            f"Backfocus Calculator v{VERSION}\n\n"
             f"Reference database: {len(REFERENCE_DB)} products\n"
             f"User parts: {len(self.data['parts'])}\n"
             f"Configurations: {len(self.data['configurations'])}\n\n"
@@ -3062,7 +3272,7 @@ class App:
     def _report_bug(self):
         import platform, urllib.parse, webbrowser
         sys_info = (
-            f"- **Backfocus Calculator:** v1\n"
+            f"- **Backfocus Calculator:** v{VERSION}\n"
             f"- **OS:** {platform.system()} {platform.version()}\n"
             f"- **Python:** {platform.python_version()}\n"
             f"- **Architecture:** {platform.machine()}\n"
@@ -3087,7 +3297,185 @@ class App:
         })
         webbrowser.open(f"https://github.com/ARP273-ROSE/backfocus/issues/new?{params}")
 
+    # ── auto-update ──────────────────────────────────────────────────
+
+    def _check_updates_startup(self):
+        """Non-blocking update check at startup (silent)."""
+        self._update_check_worker_start(silent=True)
+
+    def _check_updates_manual(self):
+        """Manual update check from Help menu (verbose)."""
+        self._update_check_worker_start(silent=False)
+
+    def _update_check_worker_start(self, silent):
+        if self._update_thread and self._update_thread.is_alive():
+            return
+        self._update_result = None
+        self._update_thread = threading.Thread(target=self._update_check_worker, daemon=True)
+        self._update_thread.start()
+        self._poll_update_check(silent)
+
+    def _update_check_worker(self):
+        self._update_result = _check_for_update()
+
+    def _poll_update_check(self, silent):
+        if self._update_thread and self._update_thread.is_alive():
+            self.root.after(200, lambda: self._poll_update_check(silent))
+            return
+        result = self._update_result
+        if isinstance(result, dict):
+            self._show_update_dialog(result)
+        elif not silent:
+            if result == "up_to_date":
+                messagebox.showinfo(self.t("help_menu"),
+                                    self.t("update_up_to_date", version=VERSION))
+            else:
+                messagebox.showwarning(self.t("help_menu"),
+                                       self.t("update_no_connection"))
+
+    def _show_update_dialog(self, info):
+        dlg = tk.Toplevel(self.root)
+        dlg.title(self.t("update_title"))
+        dlg.configure(bg="#1a1a2e")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        w, h = 520, 400
+        dlg.withdraw()
+        dlg.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dlg.geometry(f"{w}x{h}+{x}+{y}")
+        dlg.deiconify()
+
+        fg = "#e0e0e0"
+        bg = "#1a1a2e"
+        accent = "#4fc3f7"
+
+        tk.Label(dlg, text=self.t("update_available"), font=("Segoe UI", 14, "bold"),
+                 fg=accent, bg=bg).pack(pady=(16, 8))
+        tk.Label(dlg, text=self.t("update_current", current=VERSION),
+                 fg=fg, bg=bg, font=("Segoe UI", 10)).pack()
+        tk.Label(dlg, text=self.t("update_new", new=info["version"]),
+                 fg=accent, bg=bg, font=("Segoe UI", 10, "bold")).pack(pady=(0, 8))
+        tk.Label(dlg, text=self.t("update_changelog"),
+                 fg=fg, bg=bg, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", padx=20)
+
+        frame = tk.Frame(dlg, bg=bg)
+        frame.pack(fill="both", expand=True, padx=20, pady=(4, 12))
+        txt = tk.Text(frame, wrap="word", bg="#0f0f23", fg=fg, font=("Consolas", 9),
+                      relief="flat", borderwidth=0, highlightthickness=0)
+        sb = tk.Scrollbar(frame, command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        txt.pack(side="left", fill="both", expand=True)
+        txt.insert("1.0", info.get("body", ""))
+        txt.configure(state="disabled")
+
+        btn_frame = tk.Frame(dlg, bg=bg)
+        btn_frame.pack(pady=(0, 16))
+        tk.Button(btn_frame, text=self.t("update_download"), bg="#2e7d32", fg="white",
+                  font=("Segoe UI", 10, "bold"), relief="flat", padx=16, pady=6,
+                  command=lambda: [dlg.destroy(), self._do_update(info)]).pack(side="left", padx=8)
+        tk.Button(btn_frame, text=self.t("update_skip"), bg="#444", fg="white",
+                  font=("Segoe UI", 10), relief="flat", padx=16, pady=6,
+                  command=dlg.destroy).pack(side="left", padx=8)
+
+    def _do_update(self, info):
+        dlg = tk.Toplevel(self.root)
+        dlg.title(self.t("update_downloading"))
+        dlg.configure(bg="#1a1a2e")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        w, h = 340, 120
+        dlg.withdraw()
+        dlg.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dlg.geometry(f"{w}x{h}+{x}+{y}")
+        dlg.deiconify()
+
+        self._update_dlg = dlg
+        self._update_error = None
+        lbl = tk.Label(dlg, text=self.t("update_downloading"), fg="#e0e0e0",
+                       bg="#1a1a2e", font=("Segoe UI", 10))
+        lbl.pack(pady=(20, 8))
+        self._update_lbl = lbl
+        pb = ttk.Progressbar(dlg, mode="indeterminate", length=260)
+        pb.pack(pady=(0, 10))
+        pb.start(15)
+
+        self._update_dl_thread = threading.Thread(
+            target=self._update_download_worker, args=(info["zipball_url"],), daemon=True)
+        self._update_dl_thread.start()
+        self._poll_update_download()
+
+    def _update_download_worker(self, url):
+        try:
+            _download_and_apply_update(url)
+        except Exception as e:
+            self._update_error = str(e)
+
+    def _poll_update_download(self):
+        if self._update_dl_thread.is_alive():
+            self.root.after(200, self._poll_update_download)
+            return
+        if self._update_error:
+            self._update_dlg.destroy()
+            messagebox.showerror(self.t("help_menu"),
+                                 self.t("update_error", err=self._update_error))
+        else:
+            self._update_lbl.config(text=self.t("update_restarting"))
+            self.root.after(600, self._restart_app)
+
+    def _restart_app(self):
+        save_data(self.data)
+        self.root.destroy()
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except OSError:
+            import subprocess
+            subprocess.Popen([sys.executable] + sys.argv)
+            sys.exit(0)
+
+    def _restore_sash_positions(self):
+        """Restore saved pane sash positions after layout is ready."""
+        ui = self.data.get("ui", {})
+        try:
+            sh = ui.get("sash_h")
+            if sh is not None:
+                self.pw_h.sash_place(0, int(sh), 0)
+        except (tk.TclError, ValueError):
+            pass
+        try:
+            sv = ui.get("sash_v")
+            if sv is not None:
+                self.pw_v.sash_place(0, 0, int(sv))
+        except (tk.TclError, ValueError):
+            pass
+
+    def _save_ui_state(self):
+        """Persist window geometry and pane sash positions."""
+        ui = self.data.setdefault("ui", {})
+        ui["window_geometry"] = self.root.geometry()
+        try:
+            ui["sash_h"] = self.pw_h.sash_coord(0)[0]
+        except (tk.TclError, IndexError):
+            pass
+        try:
+            ui["sash_v"] = self.pw_v.sash_coord(0)[1]
+        except (tk.TclError, IndexError):
+            pass
+
     def _on_close(self):
+        # Flush any pending debounced save
+        if hasattr(self, '_save_cfg_after') and self._save_cfg_after:
+            self.root.after_cancel(self._save_cfg_after)
+            self._save_cfg_after = None
+        self._save_ui_state()
         save_data(self.data)
         if messagebox.askyesno(self.t("quit"), self.t("confirm_quit")):
             self.root.destroy()
@@ -3111,6 +3499,10 @@ def main():
                     pass
     root = tk.Tk()
     App(root)
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(100, lambda: root.attributes("-topmost", False))
+    root.focus_force()
     root.mainloop()
 
 if __name__ == "__main__":
