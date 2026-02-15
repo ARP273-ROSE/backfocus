@@ -36,6 +36,7 @@ TR = {
     "new_part":          {"en": "New Part", "fr": "Nouvelle pièce"},
     "user_guide":        {"en": "User Guide", "fr": "Guide d'utilisation"},
     "about":             {"en": "About", "fr": "À propos"},
+    "report_bug":        {"en": "Report Bug…", "fr": "Signaler un bug…"},
     "units":             {"en": "Measurement Units", "fr": "Unités de mesure"},
     "length_mm":         {"en": "Lengths in mm", "fr": "Longueurs en mm"},
     "length_in":         {"en": "Lengths in inches", "fr": "Longueurs en pouces"},
@@ -2912,6 +2913,8 @@ class App:
         hm = tk.Menu(self.menu, tearoff=0, **mo)
         hm.add_command(label=self.t("user_guide"), command=lambda: open_help(self.root, self.lang))
         hm.add_command(label=self.t("about"), command=self._about)
+        hm.add_separator()
+        hm.add_command(label=self.t("report_bug"), command=self._report_bug)
         self.menu.add_cascade(label=self.t("help_menu"), menu=hm)
 
         lm = tk.Menu(self.menu, tearoff=0, **mo)
@@ -2943,6 +2946,34 @@ class App:
             f"Configurations: {len(self.data['configurations'])}\n\n"
             "Dark space theme \u00b7 Galaxy cursor\n"
             "Bilingual EN/FR")
+
+    def _report_bug(self):
+        import platform, urllib.parse, webbrowser
+        sys_info = (
+            f"- **Backfocus Calculator:** v1\n"
+            f"- **OS:** {platform.system()} {platform.version()}\n"
+            f"- **Python:** {platform.python_version()}\n"
+            f"- **Architecture:** {platform.machine()}\n"
+            f"- **Tk:** {tk.TkVersion}\n"
+        )
+        body = (
+            "## Description\n\n"
+            "<!-- Describe the bug clearly -->\n\n\n"
+            "## Steps to Reproduce\n\n"
+            "1. \n2. \n3. \n\n"
+            "## Expected Behavior\n\n\n\n"
+            "## Actual Behavior\n\n\n\n"
+            "## System Info\n\n"
+            f"{sys_info}\n"
+            "## Screenshots / Logs\n\n"
+            "<!-- Paste any relevant screenshots or log output -->\n"
+        )
+        params = urllib.parse.urlencode({
+            'title': '[Bug] ',
+            'body': body,
+            'labels': 'bug',
+        })
+        webbrowser.open(f"https://github.com/ARP273-ROSE/backfocus/issues/new?{params}")
 
     def _on_close(self):
         save_data(self.data)
