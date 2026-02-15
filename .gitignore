@@ -22,5 +22,8 @@ manual/*.toc
 # Personal files
 *.xlsx
 
+# AI context (local only)
+CLAUDE.md
+
 # Windows temp artifacts
 NDH6SA~M
