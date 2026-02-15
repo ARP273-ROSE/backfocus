@@ -378,7 +378,8 @@ required_menu_keys = [
     "file", "view", "settings", "help_menu", "language",
     "save_all", "export_config", "import_config", "export_all", "import_all", "quit",
     "open_catalog", "units", "length_mm", "length_in", "mass_g", "mass_oz",
-    "user_guide", "about",
+    "user_guide", "about", "report_bug",
+    "fits_analyzer", "fits_btn", "fits_analyzer_missing_deps",
 ]
 missing_keys = [k for k in required_menu_keys if k not in TR]
 test("all menu TR keys exist", len(missing_keys) == 0, f"missing: {missing_keys}")

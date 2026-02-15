@@ -186,6 +186,7 @@ TR = {
     "bf_start_after_end":{"en": "BF Start must be before BF End.", "fr": "Le début BF doit être avant la fin BF."},
     "bf_end_before_start":{"en": "BF End must be after BF Start.", "fr": "La fin BF doit être après le début BF."},
     "fits_analyzer":     {"en": "FITS / XISF Backfocus Analyzer\u2026", "fr": "Analyseur FITS / XISF de backfocus\u2026"},
+    "fits_btn":          {"en": "\u2b50 Analyze FITS Image", "fr": "\u2b50 Analyser image FITS"},
     "fits_analyzer_missing_deps": {
         "en": "The FITS analyzer requires additional packages.\n\nRun:\n  pip install numpy scipy astropy photutils matplotlib\n\nOr relaunch with launch.bat / launch.sh to install automatically.",
         "fr": "L'analyseur FITS nécessite des paquets supplémentaires.\n\nExécutez :\n  pip install numpy scipy astropy photutils matplotlib\n\nOu relancez avec launch.bat / launch.sh pour installer automatiquement."},
@@ -1240,7 +1241,8 @@ class App:
         self._btn_imgs = imgs = {}
         for name, color in [("n", C["btn_bg"]), ("h", C["btn_hover"]),
                             ("a", C["btn_active"]),
-                            ("an", C["accent_teal"]), ("ah", C["accent_green"])]:
+                            ("an", C["accent_teal"]), ("ah", C["accent_green"]),
+                            ("fn", C["accent_purple"]), ("fh", "#C8A0E8")]:
             imgs[name] = self._pill_img(self.root, SZ, SZ, R, color)
         bd = (R, R, R, R)  # 9-slice border insets
         s.element_create("RoundBtn.bg", "image", imgs["n"],
@@ -1290,6 +1292,19 @@ class App:
         ])
         s.configure("Accent.TButton", foreground=C["bg_dark"],
                     font=("Segoe UI",9,"bold"), padding=(14,7), anchor="center")
+
+        s.element_create("FITSBtn.bg", "image", imgs["fn"],
+                         ("active", imgs["fh"]), ("pressed", imgs["a"]),
+                         border=bd, sticky="nsew")
+        s.layout("FITS.TButton", [
+            ("FITSBtn.bg", {"sticky":"nsew", "children": [
+                ("Button.padding", {"sticky":"nsew", "children": [
+                    ("Button.label", {"sticky":"nsew"})
+                ]})
+            ]})
+        ])
+        s.configure("FITS.TButton", foreground=C["fg_bright"],
+                    font=("Segoe UI",10,"bold"), padding=(18,8), anchor="center")
 
         s.configure("Small.TButton", padding=(6,3), font=("Segoe UI",8))
 
@@ -1382,6 +1397,15 @@ class App:
         self.btn_new_part.pack(side=tk.LEFT, padx=4)
         self._tip(self.btn_new_part, "Create a new custom part",
                   "Cr\u00e9er une nouvelle pi\u00e8ce personnalis\u00e9e")
+
+        # ── FITS analyzer big button (right side) ──
+        self.btn_fits = ttk.Button(mtb, text=self.t("fits_btn"),
+                                   command=self._open_fits_analyzer,
+                                   style="FITS.TButton")
+        self.btn_fits.pack(side=tk.RIGHT, padx=(12, 4))
+        self._tip(self.btn_fits,
+                  "Analyze a FITS/XISF image to diagnose backfocus errors",
+                  "Analyser une image FITS/XISF pour diagnostiquer les erreurs de backfocus")
 
         # ── configuration panel ──
         self.fr_cfg = ttk.Frame(self.root)
@@ -2986,6 +3010,7 @@ class App:
 
         self.btn_open_cat.config(text=self.t("open_catalog"))
         self.btn_new_part.config(text=self.t("new_part"))
+        self.btn_fits.config(text=self.t("fits_btn"))
         self.lbl_target.config(text=self.t("target_bf"))
         self.lbl_notes.config(text=self.t("notes"))
         for key in ("add_to_stack","remove_from_stack","move_up","move_down",

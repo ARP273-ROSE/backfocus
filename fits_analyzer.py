@@ -75,6 +75,12 @@ TR_FITS = {
     "image_size":       {"en": "Image: {w}×{h}", "fr": "Image : {w}×{h}"},
     "note_single":      {"en": "Note: Single-image analysis gives direction only, not precise offset.",
                          "fr": "Note : L'analyse mono-image donne la direction, pas l'écart précis."},
+    "experimental":     {"en": "\u26a0 EXPERIMENTAL \u2014 For precise backfocus measurement, use HocusFocus with N.I.N.A.",
+                         "fr": "\u26a0 EXP\u00c9RIMENTAL \u2014 Pour une mesure pr\u00e9cise du backfocus, utilisez HocusFocus avec N.I.N.A."},
+    "warn_not_light":   {"en": "\u26a0 This image appears to be a {frametype} frame, not a Light frame.\n"
+                                "Backfocus analysis requires a Light frame with stars.",
+                         "fr": "\u26a0 Cette image semble \u00eatre un {frametype}, pas un Light.\n"
+                                "L'analyse de backfocus n\u00e9cessite un Light avec des \u00e9toiles."},
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -127,6 +133,25 @@ _C = {
 #  ANALYSIS FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════
 
+def _detect_frame_type(header):
+    """Check FITS/XISF header for frame type. Returns None if light or unknown."""
+    if header is None:
+        return None
+    # Check common keywords: IMAGETYP, FRAME, PICTTYPE
+    for key in ("IMAGETYP", "FRAME", "PICTTYPE"):
+        val = ""
+        if hasattr(header, "get"):
+            val = str(header.get(key, "")).strip().lower()
+        elif isinstance(header, dict):
+            val = str(header.get(key, "")).strip().lower()
+        if not val:
+            continue
+        for bad in ("flat", "bias", "dark", "offset"):
+            if bad in val:
+                return val.capitalize()
+    return None
+
+
 def _is_xisf(filepath):
     """Check if file is XISF by magic bytes."""
     try:
@@ -148,11 +173,10 @@ def _load_xisf(filepath):
         header_len, _reserved = struct.unpack("<II", f.read(8))
         xml_bytes = f.read(header_len)
 
-        # Parse XML — strip namespace if present
+        # Parse XML — strip all xmlns for easier element lookup
         xml_str = xml_bytes.decode("utf-8", errors="replace")
-        # Remove namespace declarations for easier parsing
-        xml_str = xml_str.replace(' xmlns="http://www.pixinsight.com/xisf"', "")
-        xml_str = xml_str.replace(" xmlns='http://www.pixinsight.com/xisf'", "")
+        import re
+        xml_str = re.sub(r'\s+xmlns\s*=\s*["\'][^"\']*["\']', '', xml_str)
         root = ET.fromstring(xml_str)
 
         # Find first Image element
@@ -197,34 +221,39 @@ def _load_xisf(filepath):
             raw = f.read(size)
         elif location.startswith("inline:"):
             import base64
-            b64_data = location.split(":", 1)[1]
-            # Might also be in element text
+            # Inline data is in the <Data> sub-element text (base64 encoded)
             data_el = img_el.find("Data")
             if data_el is not None and data_el.text:
-                b64_data = data_el.text
-            raw = base64.b64decode(b64_data)
+                raw = base64.b64decode(data_el.text.strip())
+            else:
+                raise ValueError("XISF inline data: no <Data> element found")
+        elif location.startswith("embedded:"):
+            raise ValueError("XISF embedded blocks not supported")
         else:
             raise ValueError(f"Unsupported XISF location: {location}")
 
         # Decompress if needed
         if compression:
             codec = compression.split(":")[0].lower()
-            if codec in ("zlib", "zlib+sh"):
-                uncompressed_size = int(compression.split(":")[1]) if ":" in compression else None
+            if "+sh" in codec:
+                raise ValueError(f"XISF byte-shuffled compression ({codec}) not supported")
+            if codec == "zlib":
                 raw = zlib.decompress(raw)
-            elif codec in ("lz4", "lz4+sh", "lz4hc", "lz4hc+sh"):
+            elif codec in ("lz4", "lz4hc"):
                 try:
                     import lz4.block
                     uncompressed_size = int(compression.split(":")[1]) if ":" in compression else 0
                     raw = lz4.block.decompress(raw, uncompressed_size=uncompressed_size)
                 except ImportError:
-                    raise ValueError("XISF file uses LZ4 compression. Install: pip install lz4")
-            elif codec in ("zstd", "zstd+sh"):
+                    raise ValueError("XISF LZ4 compression: pip install lz4")
+            elif codec == "zstd":
                 try:
                     import zstandard
                     raw = zstandard.ZstdDecompressor().decompress(raw)
                 except ImportError:
-                    raise ValueError("XISF file uses Zstandard compression. Install: pip install zstandard")
+                    raise ValueError("XISF Zstandard compression: pip install zstandard")
+            else:
+                raise ValueError(f"Unsupported XISF compression: {codec}")
 
         data = np.frombuffer(raw, dtype=dtype)
 
@@ -298,41 +327,85 @@ def load_fits_data(filepath):
     return data, header
 
 
+def _run_dao(data, fwhm_est, threshold_sigma):
+    """Run DAOStarFinder with given parameters. Returns sources table or None."""
+    mean, median, std = sigma_clipped_stats(data, sigma=3.0)
+    if std < 1e-10:
+        std = np.std(data)
+    if std < 1e-10:
+        return None, median
+
+    finder = DAOStarFinder(fwhm=fwhm_est, threshold=threshold_sigma * std)
+    sources = finder(data - median)
+    return sources, median
+
+
 def detect_stars(data, fwhm_est=None, threshold=None):
-    """Detect stars using DAOStarFinder. Returns list of dicts with x, y, flux."""
+    """Detect stars using DAOStarFinder. Returns list of dicts with x, y, flux.
+
+    Automatically retries with multiple FWHM values (2, 3, 5, 8, 12) and
+    progressively lower thresholds if initial detection fails.
+    """
     if fwhm_est is None:
         fwhm_est = ANALYSIS_DEFAULTS["fwhm_est"]
     if threshold is None:
         threshold = ANALYSIS_DEFAULTS["threshold"]
 
-    mean, median, std = sigma_clipped_stats(data, sigma=3.0)
-
-    finder = DAOStarFinder(fwhm=fwhm_est, threshold=threshold * std)
-    sources = finder(data - median)
-
-    if sources is None or len(sources) == 0:
-        return []
-
     margin = ANALYSIS_DEFAULTS["edge_margin"]
     h, w = data.shape
-    mask = ((sources["xcentroid"] > margin) &
-            (sources["xcentroid"] < w - margin) &
-            (sources["ycentroid"] > margin) &
-            (sources["ycentroid"] < h - margin))
-    sources = sources[mask]
+    # Reduce margin for small images
+    eff_margin = min(margin, h // 6, w // 6)
+    limit = ANALYSIS_DEFAULTS["star_limit"]
+    min_stars = ANALYSIS_DEFAULTS["min_stars"]
 
-    if len(sources) == 0:
+    # Try requested FWHM first, then auto-scan if that fails
+    fwhm_candidates = [fwhm_est]
+    for f in [2.0, 3.0, 5.0, 8.0, 12.0]:
+        if abs(f - fwhm_est) > 0.5:
+            fwhm_candidates.append(f)
+
+    thresh_candidates = [threshold]
+    for t in [5.0, 3.0]:
+        if t < threshold and t not in thresh_candidates:
+            thresh_candidates.append(t)
+
+    best_sources = None
+    best_count = 0
+
+    for fwhm_try in fwhm_candidates:
+        for thresh_try in thresh_candidates:
+            sources, _ = _run_dao(data, fwhm_try, thresh_try)
+            if sources is None or len(sources) == 0:
+                continue
+
+            # Apply edge margin filter
+            mask = ((sources["xcentroid"] > eff_margin) &
+                    (sources["xcentroid"] < w - eff_margin) &
+                    (sources["ycentroid"] > eff_margin) &
+                    (sources["ycentroid"] < h - eff_margin))
+            filtered = sources[mask]
+
+            if len(filtered) > best_count:
+                best_sources = filtered
+                best_count = len(filtered)
+
+            # Good enough — stop searching
+            if best_count >= min_stars:
+                break
+        if best_count >= min_stars:
+            break
+
+    if best_sources is None or len(best_sources) == 0:
         return []
 
     # Sort by flux descending, keep top N
-    sources.sort("flux")
-    sources.reverse()
-    limit = ANALYSIS_DEFAULTS["star_limit"]
-    if len(sources) > limit:
-        sources = sources[:limit]
+    best_sources.sort("flux")
+    best_sources.reverse()
+    if len(best_sources) > limit:
+        best_sources = best_sources[:limit]
 
     stars = []
-    for row in sources:
+    for row in best_sources:
         stars.append({
             "x": float(row["xcentroid"]),
             "y": float(row["ycentroid"]),
@@ -508,13 +581,7 @@ def build_fwhm_surface(star_fits, image_shape):
     fwhm_grid = (A_grid @ coeffs).reshape(gs, gs)
 
     # Center and edge FWHM
-    center_fwhm = coeffs[0]  # value at (0,0)
-    # Average at the 4 edges
-    edge_vals = [
-        np.polyval([coeffs[3], coeffs[1], coeffs[0]], 1),   # x=1,y=0
-        np.polyval([coeffs[3], coeffs[1], coeffs[0]], -1),  # x=-1,y=0
-    ]
-    # Also evaluate at corners of the grid edge
+    center_fwhm = max(coeffs[0], 0.1)  # value at (0,0), guard against negative
     edge_points = [(-1, 0), (1, 0), (0, -1), (0, 1)]
     edge_fwhm_vals = []
     for ex, ey in edge_points:
@@ -651,6 +718,21 @@ class FITSAnalyzerWindow:
         s = e.get(self.lang, e.get("en", key))
         return s.format(**kw) if kw else s
 
+    def _tip(self, widget, en, fr=None):
+        """Create a bilingual tooltip on a widget (reuses main app's Tooltip class)."""
+        from backfocus import Tooltip
+        Tooltip(widget, en, fr or en, self)
+
+    def _on_close(self):
+        """Clean up resources and close window."""
+        self._data = None
+        self._header = None
+        self._results = None
+        import matplotlib.pyplot as plt
+        plt.close(self._fig_fwhm)
+        plt.close(self._fig_vec)
+        self.win.destroy()
+
     # ── Build UI ──
     def _build(self):
         self.win = tk.Toplevel(self.app.root)
@@ -658,6 +740,14 @@ class FITSAnalyzerWindow:
         self.win.geometry("1200x820")
         self.win.configure(bg=_C["bg_dark"])
         self.win.minsize(900, 650)
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # ── Experimental banner ──
+        banner = tk.Label(self.win, text=self.t("experimental"),
+                          bg="#3A2820", fg=_C["accent_orange"],
+                          font=("Segoe UI", 10, "bold"), pady=6,
+                          anchor=tk.CENTER)
+        banner.pack(fill=tk.X, padx=6, pady=(6, 0))
 
         # ── Toolbar ──
         toolbar = tk.Frame(self.win, bg=_C["bg_mid"], bd=0, highlightthickness=0)
@@ -670,10 +760,16 @@ class FITSAnalyzerWindow:
 
         self._btn_browse = tk.Button(toolbar, text=self.t("browse"), command=self._load_file, **btn_style)
         self._btn_browse.pack(side=tk.LEFT, padx=(4, 2))
+        self._tip(self._btn_browse,
+                  "Load a FITS, XISF, or compressed FITS image",
+                  "Charger une image FITS, XISF ou FITS compress\u00e9e")
 
         self._btn_analyze = tk.Button(toolbar, text=self.t("analyze"), command=self._run_analysis,
                                       state=tk.DISABLED, **btn_style)
         self._btn_analyze.pack(side=tk.LEFT, padx=2)
+        self._tip(self._btn_analyze,
+                  "Run star detection, PSF fitting, and backfocus diagnosis",
+                  "Lancer la d\u00e9tection d'\u00e9toiles, l'ajustement PSF et le diagnostic")
 
         sep = tk.Frame(toolbar, width=20, bg=_C["bg_mid"])
         sep.pack(side=tk.LEFT)
@@ -686,6 +782,9 @@ class FITSAnalyzerWindow:
                                   insertbackground=_C["fg_bright"], relief="flat",
                                   font=("Segoe UI", 9))
         self._ent_fwhm.pack(side=tk.LEFT, padx=2)
+        self._tip(self._ent_fwhm,
+                  "Estimated star FWHM in pixels (auto-adjusted if detection fails)",
+                  "FWHM estim\u00e9 des \u00e9toiles en pixels (ajust\u00e9 auto si d\u00e9tection \u00e9choue)")
 
         tk.Label(toolbar, text=self.t("threshold"), bg=_C["bg_mid"],
                  fg=_C["fg_main"], font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(12, 2))
@@ -695,6 +794,9 @@ class FITSAnalyzerWindow:
                                     insertbackground=_C["fg_bright"], relief="flat",
                                     font=("Segoe UI", 9))
         self._ent_thresh.pack(side=tk.LEFT, padx=2)
+        self._tip(self._ent_thresh,
+                  "Detection threshold in sigma above background (lower = more stars)",
+                  "Seuil de d\u00e9tection en sigma au-dessus du fond (plus bas = plus d'\u00e9toiles)")
 
         # File label on right
         self._file_label = tk.Label(toolbar, text=self.t("no_file"), bg=_C["bg_mid"],
@@ -778,7 +880,9 @@ class FITSAnalyzerWindow:
 
     # ── File loading ──
     def _load_file(self):
+        self.win.attributes("-topmost", True)
         fp = filedialog.askopenfilename(
+            parent=self.win,
             title=self.t("browse"),
             filetypes=[("All supported", "*.fits *.fit *.fts *.fits.fz *.fit.fz *.xisf "
                                          "*.FITS *.FIT *.FTS *.FITS.fz *.FIT.fz *.XISF"),
@@ -786,10 +890,13 @@ class FITSAnalyzerWindow:
                        ("Compressed FITS", "*.fits.fz *.fit.fz *.FITS.fz *.FIT.fz"),
                        ("XISF files", "*.xisf *.XISF"),
                        ("All files", "*.*")])
+        self.win.attributes("-topmost", False)
+        self.win.lift()
+        self.win.focus_force()
         if not fp:
             return
         self._filepath = fp
-        fname = fp.rsplit("/", 1)[-1] if "/" in fp else fp.rsplit("\\", 1)[-1]
+        fname = os.path.basename(fp)
         self._file_label.configure(text=f"{self.t('file_label')} {fname}",
                                    fg=_C["fg_bright"])
         self._btn_analyze.configure(state=tk.NORMAL)
@@ -808,6 +915,17 @@ class FITSAnalyzerWindow:
         self._btn_analyze.configure(state=tk.DISABLED)
         self._btn_browse.configure(state=tk.DISABLED)
 
+        # Read Tk variables on main thread (thread-safe)
+        try:
+            fwhm_est = float(self._var_fwhm.get())
+        except ValueError:
+            fwhm_est = ANALYSIS_DEFAULTS["fwhm_est"]
+        try:
+            threshold = float(self._var_thresh.get())
+        except ValueError:
+            threshold = ANALYSIS_DEFAULTS["threshold"]
+
+        self._worker_params = (fwhm_est, threshold)
         self._thread = threading.Thread(target=self._analysis_worker, daemon=True)
         self._thread.start()
         self._poll_thread()
@@ -815,33 +933,25 @@ class FITSAnalyzerWindow:
     def _analysis_worker(self):
         """Run the full analysis pipeline in a background thread."""
         try:
-            # Parse user parameters
-            try:
-                fwhm_est = float(self._var_fwhm.get())
-            except ValueError:
-                fwhm_est = ANALYSIS_DEFAULTS["fwhm_est"]
-            try:
-                threshold = float(self._var_thresh.get())
-            except ValueError:
-                threshold = ANALYSIS_DEFAULTS["threshold"]
+            fwhm_est, threshold = self._worker_params
 
-            # 1. Load FITS
+            # 1. Load image
             self._status_text = self.t("loading")
             self._progress = (5, 100)
             data, header = load_fits_data(self._filepath)
             self._data = data
             self._header = header
 
-            # 2. Detect stars
+            # Check frame type — warn if not a light
+            bad_frame = _detect_frame_type(header)
+            if bad_frame:
+                self._error = self.t("warn_not_light", frametype=bad_frame)
+                return
+
+            # 2. Detect stars (auto-retries FWHM and threshold)
             self._status_text = self.t("detecting")
             self._progress = (15, 100)
             stars = detect_stars(data, fwhm_est=fwhm_est, threshold=threshold)
-
-            # Retry with lower threshold if too few
-            if len(stars) < ANALYSIS_DEFAULTS["min_stars"]:
-                retry_thresh = ANALYSIS_DEFAULTS["retry_threshold"]
-                if retry_thresh < threshold:
-                    stars = detect_stars(data, fwhm_est=fwhm_est, threshold=retry_thresh)
 
             if len(stars) < 3:
                 self._error = self.t("too_few_stars", n=len(stars))
@@ -921,8 +1031,9 @@ class FITSAnalyzerWindow:
 
     def _draw_fwhm_map(self, results):
         """Draw FWHM contour map with star scatter overlay."""
+        self._fig_fwhm.clf()
+        self._ax_fwhm = self._fig_fwhm.add_subplot(111)
         ax = self._ax_fwhm
-        ax.clear()
         ax.set_facecolor(_C["bg_dark"])
         ax.set_title(self.t("fwhm_map_title"), color=_C["fg_main"], fontsize=10)
 
@@ -964,8 +1075,9 @@ class FITSAnalyzerWindow:
 
     def _draw_vector_field(self, results):
         """Draw PSF elongation vector field with color-coded radial/tangential."""
+        self._fig_vec.clf()
+        self._ax_vec = self._fig_vec.add_subplot(111)
         ax = self._ax_vec
-        ax.clear()
         ax.set_facecolor(_C["bg_dark"])
         ax.set_title(self.t("vector_title"), color=_C["fg_main"], fontsize=10)
 

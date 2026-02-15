@@ -63,6 +63,18 @@ Telescope, Refractor, Camera Lens, Astro Camera, DSLR/Mirrorless, Eyepiece, Barl
 - All labels, messages, help text, and dialogs are fully translated
 - Language preference is saved automatically
 
+### FITS / XISF Backfocus Analyzer / Analyseur FITS / XISF de backfocus
+
+> **Experimental** — For precise measurement, use [HocusFocus](https://nighttime-imaging.eu/) with N.I.N.A.
+
+- Load **FITS** (.fits, .fit, .fts), **compressed FITS** (.fits.fz), or **XISF** (PixInsight) images
+- Automatically **detect stars** and fit elliptical 2D Gaussians on each one
+- Build a **FWHM map** (polynomial surface) showing focus quality across the field
+- Display a **vector field** of star elongation directions (radial vs tangential)
+- **Diagnose backfocus errors**: radial elongation = too short, tangential = too long
+- RGB images auto-converted to luminance, large images auto-binned 2x2
+- Threaded analysis with progress bar
+
 ### Dark Space Theme / Thème spatial
 - Dark space/cosmos theme with color accents
 - Color-coded part types in the diagram
@@ -73,7 +85,8 @@ Telescope, Refractor, Camera Lens, Astro Camera, DSLR/Mirrorless, Eyepiece, Barl
 ## Requirements / Prérequis
 
 - **Python 3.8+** with **tkinter** (included by default on Windows and macOS)
-- **No external dependencies** — everything uses the Python standard library
+- **Core app**: no external dependencies (pure tkinter)
+- **FITS Analyzer** (optional): `pip install numpy scipy astropy photutils matplotlib`
 
 ### Linux
 ```bash
@@ -108,7 +121,8 @@ The launcher script will:
 1. Detect Python (or guide you to install it)
 2. Verify tkinter is available
 3. Create a virtual environment if needed
-4. Launch the application
+4. Install FITS analyzer dependencies from requirements.txt
+5. Launch the application
 
 ### Manual Launch / Lancement direct
 ```bash
@@ -192,7 +206,8 @@ backfocus/
 ├── test_audit.py          # Automated test suite
 ├── launch.bat             # Windows launcher (auto-setup)
 ├── launch.sh              # Linux/macOS launcher (auto-setup)
-├── requirements.txt       # Python dependencies (none external)
+├── fits_analyzer.py       # FITS/XISF backfocus analyzer (optional)
+├── requirements.txt       # Python dependencies for FITS analyzer
 ├── README.md              # This file
 └── manual/
     └── manual.pdf         # Bilingual user manual
