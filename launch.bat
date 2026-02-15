@@ -111,9 +111,24 @@ if exist "%SCRIPT_DIR%requirements.txt" (
 )
 
 :run_direct
-:: --- Launch the application ---
+:: --- Launch the application (hide console) ---
 echo.
 echo Starting Backfocus Calculator...
 echo.
-start "" "%PYTHON_CMD%" "%SCRIPT_DIR%backfocus.py"
-exit /b 0
+
+:: Try pythonw.exe (GUI, no console) from venv first, then system
+set "PYTHONW_CMD="
+if exist "%SCRIPT_DIR%venv\Scripts\pythonw.exe" (
+    set "PYTHONW_CMD=%SCRIPT_DIR%venv\Scripts\pythonw.exe"
+) else (
+    where pythonw >nul 2>&1
+    if !ERRORLEVEL! equ 0 set "PYTHONW_CMD=pythonw"
+)
+
+if defined PYTHONW_CMD (
+    start "" "%PYTHONW_CMD%" "%SCRIPT_DIR%backfocus.py"
+) else (
+    :: Fallback: python.exe — use /b to avoid opening a second console
+    start /b "" "%PYTHON_CMD%" "%SCRIPT_DIR%backfocus.py"
+)
+exit

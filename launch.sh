@@ -79,8 +79,10 @@ if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
     "$PYTHON_CMD" -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet 2>/dev/null || true
 fi
 
-# --- Launch ---
+# --- Launch (detach from terminal) ---
 echo ""
 echo "Starting Backfocus Calculator..."
 echo ""
-exec "$PYTHON_CMD" "$SCRIPT_DIR/backfocus.py"
+nohup "$PYTHON_CMD" "$SCRIPT_DIR/backfocus.py" >/dev/null 2>&1 &
+disown 2>/dev/null
+exit 0
