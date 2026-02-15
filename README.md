@@ -65,7 +65,7 @@ Telescope, Refractor, Camera Lens, Astro Camera, DSLR/Mirrorless, Eyepiece, Barl
 
 ### FITS / XISF Backfocus Analyzer / Analyseur FITS / XISF de backfocus
 
-> **Experimental** — For precise measurement, use [HocusFocus](https://nighttime-imaging.eu/) with N.I.N.A.
+> **Experimental** — For precise measurement, use [HocusFocus](https://github.com/jbautista75/HocusFocus) with [N.I.N.A.](https://nighttime-imaging.eu/)
 
 - Load **FITS** (.fits, .fit, .fts), **compressed FITS** (.fits.fz), or **XISF** (PixInsight) images
 - Automatically **detect stars** and fit elliptical 2D Gaussians on each one
