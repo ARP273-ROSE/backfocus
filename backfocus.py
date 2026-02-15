@@ -1490,6 +1490,10 @@ class App:
         self.canvas.bind("<ButtonPress-1>", self._diag_drag_start)
         self.canvas.bind("<B1-Motion>", self._diag_drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self._diag_drag_end)
+        _tip_lbl = tk.Label(self.root, text="\u2615", fg=C["fg_dim"], bg=C["bg_dark"],
+                            font=("Segoe UI",7), cursor="hand2")
+        _tip_lbl.pack(side=tk.BOTTOM, anchor=tk.E, padx=6, pady=(0,2))
+        _tip_lbl.bind("<Button-1>", lambda e: __import__('webbrowser').open("https://buymeacoffee.com/orlytourbou"))
         self._refresh_cfgs()
 
     # ── open catalog ──

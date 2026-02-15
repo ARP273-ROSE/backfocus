@@ -211,3 +211,7 @@ This project is provided as-is for personal astrophotography use.
 Contributions are welcome! Feel free to open issues or pull requests.
 
 Les contributions sont bienvenues ! N'hésitez pas à ouvrir des issues ou des pull requests.
+
+---
+
+<sub>If you find this useful, you can [buy me a coffee](https://buymeacoffee.com/orlytourbou) :)</sub>
