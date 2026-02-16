@@ -7,9 +7,9 @@ Light convention: Telescope (left) → Camera (right).
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import json, os, sys, copy, itertools, math, random, bisect, threading
+import json, os, sys, copy, itertools, math, random, bisect, threading, queue
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # ═══════════════════════════════════════════════════════════════════
 #  TRANSLATIONS
@@ -357,11 +357,22 @@ def load_data():
     return _default_data()
 
 def save_data(data):
+    tmp = DATA_FILE + ".tmp"
     try:
-        with open(DATA_FILE, "w", encoding="utf-8") as fh:
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, ensure_ascii=False)
-    except OSError:
-        pass
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, DATA_FILE)
+    except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        try:
+            messagebox.showerror("Save Error", f"Could not save data:\n{e}")
+        except Exception:
+            pass
 
 # ═══════════════════════════════════════════════════════════════════
 #  AUTO-UPDATE HELPERS
@@ -400,50 +411,74 @@ def _check_for_update():
         remote = _parse_version(tag)
         local = _parse_version(VERSION)
         if remote > local:
+            zurl = data.get("zipball_url", "")
+            if not zurl.startswith(f"https://api.github.com/repos/{_UPDATE_REPO}/"):
+                return None
             return {"tag": tag, "version": tag.lstrip("vV"),
-                    "body": data.get("body", ""), "zipball_url": data.get("zipball_url", "")}
+                    "body": data.get("body", ""), "zipball_url": zurl}
         return "up_to_date"
     except urllib.request.HTTPError as e:
         if e.code == 404:
             return "up_to_date"
         return None
-    except Exception:
+    except (OSError, ValueError, KeyError, TypeError):
         return None
+
+_MAX_UPDATE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 def _download_and_apply_update(zipball_url):
     """Download zipball, extract whitelisted files over the install directory."""
     import urllib.request, zipfile, tempfile, shutil
     app_dir = os.path.dirname(os.path.abspath(__file__))
-    tmp_zip = os.path.join(tempfile.gettempdir(), "backfocus_update.zip")
-    tmp_dir = os.path.join(tempfile.gettempdir(), "backfocus_update_extracted")
+    tmp_zip = os.path.join(tempfile.mkdtemp(prefix="backfocus_"), "update.zip")
+    tmp_dir = tempfile.mkdtemp(prefix="backfocus_extract_")
     try:
-        # download
+        # download with size limit
         req = urllib.request.Request(zipball_url, headers={"User-Agent": "BackfocusCalculator"})
         with urllib.request.urlopen(req, timeout=60) as resp:
             with open(tmp_zip, "wb") as f:
-                f.write(resp.read())
-        # extract
-        if os.path.isdir(tmp_dir):
-            shutil.rmtree(tmp_dir)
+                total = 0
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _MAX_UPDATE_SIZE:
+                        raise ValueError("Download exceeds 50 MB limit")
+                    f.write(chunk)
+        # validate zip entries before extraction (path traversal + symlink protection)
+        real_tmp = os.path.realpath(tmp_dir)
         with zipfile.ZipFile(tmp_zip) as zf:
+            for info in zf.infolist():
+                if info.filename.startswith('/') or '..' in info.filename:
+                    raise ValueError(f"Unsafe zip entry: {info.filename}")
+                target = os.path.realpath(os.path.join(tmp_dir, info.filename))
+                if not target.startswith(real_tmp + os.sep) and target != real_tmp:
+                    raise ValueError(f"Zip path traversal: {info.filename}")
+                # reject symlinks (external_attr >> 16 gives Unix mode; 0o120000 = symlink)
+                if info.external_attr and (info.external_attr >> 16) & 0o170000 == 0o120000:
+                    raise ValueError(f"Symlink in zip: {info.filename}")
             zf.extractall(tmp_dir)
         # find the single sub-folder GitHub creates (e.g. ARP273-ROSE-backfocus-abc1234/)
         entries = os.listdir(tmp_dir)
         src_root = os.path.join(tmp_dir, entries[0]) if len(entries) == 1 else tmp_dir
-        # copy whitelisted files
+        # copy whitelisted files (skip symlinks)
         for fname in os.listdir(src_root):
             src_path = os.path.join(src_root, fname)
             dst_path = os.path.join(app_dir, fname)
+            if os.path.islink(src_path):
+                continue
             if os.path.isfile(src_path) and fname in _UPDATE_FILE_WHITELIST:
                 shutil.copy2(src_path, dst_path)
             elif os.path.isdir(src_path) and fname in _UPDATE_DIR_WHITELIST:
                 if os.path.isdir(dst_path):
                     shutil.rmtree(dst_path)
-                shutil.copytree(src_path, dst_path)
+                shutil.copytree(src_path, dst_path, symlinks=False)
     finally:
         # cleanup
-        if os.path.isfile(tmp_zip):
-            os.remove(tmp_zip)
+        parent_zip = os.path.dirname(tmp_zip)
+        if os.path.isdir(parent_zip):
+            shutil.rmtree(parent_zip, ignore_errors=True)
         if os.path.isdir(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -518,6 +553,13 @@ def _fmt_mass(val, unit="g"):
         return f"{val/28.3495:.2f} oz"
     return f"{val:.0f} g"
 
+def _safe_int(s, default=0):
+    """Parse string to int, return default if invalid."""
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        return default
+
 # ═══════════════════════════════════════════════════════════════════
 #  TOOLTIP
 # ═══════════════════════════════════════════════════════════════════
@@ -558,6 +600,7 @@ class GalaxyCursor:
     def __init__(self, root):
         self.root = root
         self._paused = False
+        self._stopped = False
         self.win = tk.Toplevel(root); self.win.overrideredirect(True)
         try: self.win.attributes("-topmost", True)
         except tk.TclError: pass
@@ -634,7 +677,12 @@ class GalaxyCursor:
 
         c.create_image(0, 0, image=img, anchor="nw")
 
+    def stop(self):
+        self._stopped = True
+
     def _poll(self):
+        if self._stopped:
+            return
         if not self._paused:
             try:
                 x = self.root.winfo_pointerx()+10
@@ -642,7 +690,10 @@ class GalaxyCursor:
                 self.win.geometry(f"+{x}+{y}"); self.win.lift()
             except Exception:
                 pass
-        self.root.after(self.POLL_MS, self._poll)
+        try:
+            self.root.after(self.POLL_MS, self._poll)
+        except tk.TclError:
+            pass
 
 # ═══════════════════════════════════════════════════════════════════
 #  HELP WINDOW
@@ -976,7 +1027,8 @@ class CatalogWindow:
         # search
         sf = ttk.Frame(tb); sf.pack(side=tk.LEFT, padx=(0,8))
         ttk.Label(sf, text=a.t("search"), **lbl_kw).pack(anchor=tk.W)
-        self._sv = tk.StringVar(); self._sv.trace_add("write", lambda *_: self._refresh())
+        self._search_after = None
+        self._sv = tk.StringVar(); self._sv.trace_add("write", lambda *_: self._debounced_refresh())
         self._se = ttk.Entry(sf, textvariable=self._sv, width=20)
         self._se.pack()
 
@@ -1016,7 +1068,7 @@ class CatalogWindow:
         self._fdcb = ttk.Combobox(df, textvariable=self._fd, values=DIAMETERS,
                                   state="readonly", width=7)
         self._fdcb.pack()
-        self._fd.trace_add("write", lambda *_: self._refresh())
+        self._fd.trace_add("write", lambda *_: self._debounced_refresh())
 
         # gender
         gf = ttk.Frame(tb); gf.pack(side=tk.LEFT, padx=3)
@@ -1033,8 +1085,8 @@ class CatalogWindow:
         olr = ttk.Frame(olf); olr.pack()
         self._fol_min = tk.StringVar()
         self._fol_max = tk.StringVar()
-        self._fol_min.trace_add("write", lambda *_: self._refresh())
-        self._fol_max.trace_add("write", lambda *_: self._refresh())
+        self._fol_min.trace_add("write", lambda *_: self._debounced_refresh())
+        self._fol_max.trace_add("write", lambda *_: self._debounced_refresh())
         ttk.Entry(olr, textvariable=self._fol_min, width=5).pack(side=tk.LEFT)
         ttk.Label(olr, text="-").pack(side=tk.LEFT, padx=2)
         ttk.Entry(olr, textvariable=self._fol_max, width=5).pack(side=tk.LEFT)
@@ -1156,11 +1208,20 @@ class CatalogWindow:
             return False
         return True
 
+    _MAX_DISPLAY = 500
+
+    def _debounced_refresh(self):
+        if self._search_after:
+            self.app.root.after_cancel(self._search_after)
+        self._search_after = self.app.root.after(200, self._refresh)
+
     def _refresh(self):
+        self._search_after = None
         self.tree.delete(*self.tree.get_children())
         lu = self.app.data.get("length_unit", "mm")
         mu = self.app.data.get("mass_unit", "g")
         items = [(i,p) for i,p in enumerate(self.app.data["parts"]) if self._match(p)]
+        total_matched = len(items)
         key_map = {"brand": lambda ip: ip[1].get("brand","").lower(),
                    "name": lambda ip: ip[1].get("name","").lower(),
                    "type": lambda ip: ip[1].get("type",""),
@@ -1179,8 +1240,9 @@ class CatalogWindow:
             # Default sort: brand then name
             items.sort(key=lambda ip: (ip[1].get("brand","").lower(),
                                        ip[1].get("name","").lower()))
+        display = items[:self._MAX_DISPLAY]
         row = 0
-        for i, p in items:
+        for i, p in display:
             tags = ["odd" if row%2==0 else "even"]
             tags.append("owned" if p.get("qty",0)>0 else "notowned")
             ol = p.get("optical_length",0)
@@ -1194,7 +1256,10 @@ class CatalogWindow:
                 p.get("qty",0), p.get("notes","")[:40],
             ), tags=tuple(tags))
             row += 1
-        self._status.config(text=self.app.t("total_parts", n=row))
+        if total_matched > self._MAX_DISPLAY:
+            self._status.config(text=f"{self._MAX_DISPLAY} / {total_matched} " + self.app.t("total_parts", n=total_matched))
+        else:
+            self._status.config(text=self.app.t("total_parts", n=row))
 
     def _sort(self, col):
         if self._sort_col == col:
@@ -1333,6 +1398,7 @@ class App:
         self._catalog_win = None
         self._fits_win = None
         self._save_cfg_after = None
+        self._pending_save = None
         self._apply_theme()
         self._build_ui()
         self._apply_language()
@@ -1340,8 +1406,19 @@ class App:
         self._win_resize_after = None
         self.root.bind("<Configure>", self._on_root_configure)
         self._update_thread = None
-        self._update_result = None
+        self._update_queue = queue.Queue()
+        self._update_dl_queue = queue.Queue()
         self.root.after(2000, self._check_updates_startup)
+
+    def _save(self):
+        """Debounced save — coalesces rapid save_data calls into one write."""
+        if hasattr(self, '_pending_save') and self._pending_save:
+            self.root.after_cancel(self._pending_save)
+        self._pending_save = self.root.after(300, self._flush_save)
+
+    def _flush_save(self):
+        self._pending_save = None
+        save_data(self.data)
 
     def t(self, key, **kw):
         e = TR.get(key, {}); s = e.get(self.lang, e.get("en", key))
@@ -1793,7 +1870,7 @@ class App:
             except ValueError: t = 55
             self.data["configurations"].append({"name":n,"target_backfocus":t,"notes":"",
                                                 "bf_start_idx":-1,"bf_end_idx":-1,"stack":[]})
-            save_data(self.data); self._refresh_cfgs()
+            self._save(); self._refresh_cfgs()
             self.clist.selection_clear(0,tk.END)
             self.clist.selection_set(len(self.data["configurations"])-1)
             self._on_cfg_select(None); dlg.destroy()
@@ -1807,13 +1884,13 @@ class App:
         if i is None: return
         nm = self.data["configurations"][i]["name"]
         if messagebox.askyesno(self.t("confirm_delete"), self.t("confirm_delete_msg",name=nm)):
-            self.data["configurations"].pop(i); save_data(self.data); self._refresh_cfgs()
+            self.data["configurations"].pop(i); self._save(); self._refresh_cfgs()
 
     def _dup_config(self):
         i = self._cfg_idx()
         if i is None: return
         nc = copy.deepcopy(self.data["configurations"][i]); nc["name"] += " (copy)"
-        self.data["configurations"].append(nc); save_data(self.data); self._refresh_cfgs()
+        self.data["configurations"].append(nc); self._save(); self._refresh_cfgs()
 
     def _edit_config(self):
         i = self._cfg_idx()
@@ -1838,7 +1915,7 @@ class App:
             try: cfg["target_backfocus"] = float(tv.get().replace(",", "."))
             except ValueError: pass
             cfg["notes"] = notesv.get()
-            save_data(self.data); self._refresh_cfgs()
+            self._save(); self._refresh_cfgs()
             self.clist.selection_clear(0, tk.END)
             self.clist.selection_set(i); self._on_cfg_select(None)
             dlg.destroy()
@@ -1901,7 +1978,7 @@ class App:
                 cfgs = self.data["configurations"]
                 item = cfgs.pop(src)
                 cfgs.insert(target, item)
-                save_data(self.data)
+                self._save()
                 self._refresh_cfgs()
                 self.clist.selection_clear(0, tk.END)
                 self.clist.selection_set(target)
@@ -1929,7 +2006,7 @@ class App:
                 if item.get("bf_role") == "end":
                     be = si; cfg["bf_end_idx"] = si; changed = True; break
         if changed:
-            save_data(self.data)
+            self._save()
         lu = self.data.get("length_unit","mm")
         for si, item in enumerate(stack):
             eff = _effective(item)
@@ -1974,7 +2051,7 @@ class App:
         ins_idx = (int(sel[0]) + 1) if sel else len(stack)
         ghost = self._make_ghost(stack, ins_idx)
         stack.insert(ins_idx, ghost)
-        save_data(self.data); self._refresh_stack()
+        self._save(); self._refresh_stack()
 
     def _stack_edit(self):
         ci = self._cfg_idx(); s = self.stree.selection()
@@ -2033,10 +2110,10 @@ class App:
         qf = ttk.Frame(dlg); qf.grid(row=r, column=1, columnspan=2, sticky=tk.W, padx=10, pady=4)
         qty_var = tk.StringVar(value=str(cat_qty)); vars_["qty"] = qty_var
         ttk.Button(qf, text="\u2212", width=2, style="Small.TButton",
-                   command=lambda: qty_var.set(str(max(0, int(qty_var.get())-1)))).pack(side=tk.LEFT, padx=(0,2))
+                   command=lambda: qty_var.set(str(max(0, _safe_int(qty_var.get())-1)))).pack(side=tk.LEFT, padx=(0,2))
         ttk.Entry(qf, textvariable=qty_var, width=4).pack(side=tk.LEFT)
         ttk.Button(qf, text="+", width=2, style="Small.TButton",
-                   command=lambda: qty_var.set(str(int(qty_var.get())+1))).pack(side=tk.LEFT, padx=(2,0))
+                   command=lambda: qty_var.set(str(_safe_int(qty_var.get())+1))).pack(side=tk.LEFT, padx=(2,0))
         r += 1
         def _save():
             try: ol = float(str(vars_["mm"].get()).replace(",","."))
@@ -2059,7 +2136,7 @@ class App:
             except ValueError: nq = cat_qty
             if cat_idx is not None:
                 self.data["parts"][cat_idx]["qty"] = nq
-            save_data(self.data); self._refresh_stack(); _close_dlg()
+            self._save(); self._refresh_stack(); _close_dlg()
         def _close_dlg():
             self.data.setdefault("ui", {})["part_dlg_geometry"] = dlg.geometry()
             dlg.destroy()
@@ -2078,7 +2155,7 @@ class App:
             v = cfg.get(mk,-1)
             if v == si: cfg[mk] = -1
             elif v > si: cfg[mk] = v-1
-        save_data(self.data); self._refresh_stack()
+        self._save(); self._refresh_stack()
 
     def _stack_up(self):
         ci = self._cfg_idx(); s = self.stree.selection()
@@ -2091,7 +2168,7 @@ class App:
                 v = cfg.get(mk,-1)
                 if v == si: cfg[mk] = si-1
                 elif v == si-1: cfg[mk] = si
-            save_data(self.data); self._refresh_stack(); self.stree.selection_set(str(si-1))
+            self._save(); self._refresh_stack(); self.stree.selection_set(str(si-1))
 
     def _stack_dn(self):
         ci = self._cfg_idx(); s = self.stree.selection()
@@ -2104,7 +2181,7 @@ class App:
                 v = cfg.get(mk,-1)
                 if v == si: cfg[mk] = si+1
                 elif v == si+1: cfg[mk] = si
-            save_data(self.data); self._refresh_stack(); self.stree.selection_set(str(si+1))
+            self._save(); self._refresh_stack(); self.stree.selection_set(str(si+1))
 
     def _stack_flip(self):
         ci = self._cfg_idx(); s = self.stree.selection()
@@ -2115,7 +2192,7 @@ class App:
         if not item.get("reversible"):
             messagebox.showinfo(self.t("flip_piece"), self.t("not_reversible")); return
         item["flipped"] = not item.get("flipped",False)
-        save_data(self.data); self._refresh_stack()
+        self._save(); self._refresh_stack()
 
     # ── drag reorder helpers ──
     def _move_stack_item(self, from_idx, to_idx):
@@ -2138,7 +2215,7 @@ class App:
                 cfg[mk] = old_v - 1
             elif to_idx <= old_v < from_idx:
                 cfg[mk] = old_v + 1
-        save_data(self.data); self._refresh_stack()
+        self._save(); self._refresh_stack()
         self.stree.selection_set(str(to_idx))
 
     # ── treeview drag reorder ──
@@ -2297,7 +2374,7 @@ class App:
         if be >= 0 and idx >= be:
             messagebox.showwarning(self.t("bf_start"), self.t("bf_start_after_end")); return
         cfg["bf_start_idx"] = idx
-        save_data(self.data); self._refresh_stack()
+        self._save(); self._refresh_stack()
 
     def _mark_bf_end(self):
         ci = self._cfg_idx(); s = self.stree.selection()
@@ -2307,7 +2384,7 @@ class App:
         if bs >= 0 and idx <= bs:
             messagebox.showwarning(self.t("bf_end"), self.t("bf_end_before_start")); return
         cfg["bf_end_idx"] = idx
-        save_data(self.data); self._refresh_stack()
+        self._save(); self._refresh_stack()
 
     # ── resolve ghosts ──
     def _resolve_ghosts(self):
@@ -2378,7 +2455,7 @@ class App:
             if not sel: return
             part = copy.deepcopy(self.data["parts"][int(sel[0])]); part["flipped"] = False
             stack[gi] = part
-            save_data(self.data); self._refresh_stack(); dlg.destroy()
+            self._save(); self._refresh_stack(); dlg.destroy()
         tree.bind("<Double-1>", lambda _: replace())
         bf = ttk.Frame(dlg); bf.pack(pady=10)
         ttk.Button(bf, text=self.t("insert"), command=replace,
@@ -2405,9 +2482,11 @@ class App:
                           ("t_conn",self.t("tside"),150),("c_conn",self.t("cside"),150)]:
             tree.heading(c, text=txt); tree.column(c, width=w, anchor=tk.CENTER if w<80 else tk.W)
         tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
+        _pick_search_after = [None]
         def refresh(*_):
             tree.delete(*tree.get_children())
             s = sv.get().lower()
+            count = 0
             for j, p in enumerate(self.data["parts"]):
                 if ov.get() and p.get("qty",0) <= 0: continue
                 if s and s not in (p.get("brand","")+' '+p.get("name","")).lower(): continue
@@ -2416,7 +2495,14 @@ class App:
                     f'{p.get("optical_length",0):.1f}',
                     f'{p.get("tside_thread","")} {p.get("tside_gender","")}'.strip(),
                     f'{p.get("cside_thread","")} {p.get("cside_gender","")}'.strip()))
-        sv.trace_add("write", refresh); refresh()
+                count += 1
+                if count >= 500:
+                    break
+        def _debounced_refresh(*_):
+            if _pick_search_after[0]:
+                dlg.after_cancel(_pick_search_after[0])
+            _pick_search_after[0] = dlg.after(200, refresh)
+        sv.trace_add("write", _debounced_refresh); refresh()
         def add():
             sel = tree.selection()
             if not sel: return
@@ -2439,7 +2525,7 @@ class App:
                 stack.append(part)
             elif cc == "edit":
                 stack.append(part)
-                save_data(self.data); self._refresh_stack(); dlg.destroy()
+                self._save(); self._refresh_stack(); dlg.destroy()
                 self.stree.selection_set(str(len(stack) - 1))
                 self._stack_edit()
                 return
@@ -2453,7 +2539,7 @@ class App:
                 cfg["bf_start_idx"] = added_idx
             elif part.get("bf_role") == "end" and cfg.get("bf_end_idx", -1) < 0:
                 cfg["bf_end_idx"] = added_idx
-            save_data(self.data); self._refresh_stack(); dlg.destroy()
+            self._save(); self._refresh_stack(); dlg.destroy()
         tree.bind("<Double-1>", lambda _: add())
         bf = ttk.Frame(dlg); bf.pack(pady=10)
         ttk.Button(bf, text=self.t("insert"), command=add, style="Accent.TButton").pack(side=tk.LEFT, padx=10)
@@ -2492,35 +2578,48 @@ class App:
         be = cfg.get("bf_end_idx", -1)
         ins_idx = (be + 1) if be >= 0 else len(cfg["stack"])
         cc = self._check_conn(cfg["stack"], ins_idx, part)
+        def _shift_bf(idx, count=1):
+            for mk in ("bf_start_idx", "bf_end_idx"):
+                if cfg.get(mk, -1) >= idx:
+                    cfg[mk] = cfg[mk] + count
         if cc == "ghost":
             ghost = self._make_ghost(cfg["stack"], ins_idx)
             cfg["stack"].insert(ins_idx, ghost)
+            _shift_bf(ins_idx)
             cfg["stack"].insert(ins_idx + 1, part)
+            _shift_bf(ins_idx + 1)
+            added_idx = ins_idx + 1
         elif cc == "flip":
             part["flipped"] = not part.get("flipped", False)
             cfg["stack"].insert(ins_idx, part)
+            _shift_bf(ins_idx)
+            added_idx = ins_idx
         elif cc == "mark_flip":
             part["reversible"] = True
             part["flipped"] = not part.get("flipped", False)
             self.data["parts"][part_idx]["reversible"] = True
             cfg["stack"].insert(ins_idx, part)
+            _shift_bf(ins_idx)
+            added_idx = ins_idx
         elif cc == "edit":
             cfg["stack"].insert(ins_idx, part)
-            save_data(self.data); self._refresh_stack()
+            _shift_bf(ins_idx)
+            self._save(); self._refresh_stack()
             self.stree.selection_set(str(ins_idx))
             self._stack_edit()
             return
         elif cc:
             cfg["stack"].insert(ins_idx, part)
+            _shift_bf(ins_idx)
+            added_idx = ins_idx
         else:
             return
         # Auto-detect bf_role
-        added_idx = cfg["stack"].index(part)
         if part.get("bf_role") == "start" and cfg.get("bf_start_idx", -1) < 0:
             cfg["bf_start_idx"] = added_idx
         elif part.get("bf_role") == "end" and cfg.get("bf_end_idx", -1) < 0:
             cfg["bf_end_idx"] = added_idx
-        save_data(self.data); self._refresh_stack()
+        self._save(); self._refresh_stack()
 
     def _conflict_ok_with_adjust(self, part, part_idx):
         """Check qty conflict; if exceeded or not owned, offer a popup to adjust quantity."""
@@ -2551,10 +2650,10 @@ class App:
         ttk.Label(qf, text=self.t("qty_adjust_custom")).pack(side=tk.LEFT)
         qv = tk.StringVar(value=str(new_qty))
         ttk.Button(qf, text="\u2212", width=2, style="Small.TButton",
-                   command=lambda: qv.set(str(max(1, int(qv.get())-1)))).pack(side=tk.LEFT, padx=(6,2))
+                   command=lambda: qv.set(str(max(1, _safe_int(qv.get(), 1)-1)))).pack(side=tk.LEFT, padx=(6,2))
         ttk.Entry(qf, textvariable=qv, width=4).pack(side=tk.LEFT)
         ttk.Button(qf, text="+", width=2, style="Small.TButton",
-                   command=lambda: qv.set(str(int(qv.get())+1))).pack(side=tk.LEFT, padx=(2,0))
+                   command=lambda: qv.set(str(_safe_int(qv.get(), 1)+1))).pack(side=tk.LEFT, padx=(2,0))
         # Info: used in configs
         if cfgs_used:
             info = ", ".join(cfgs_used)
@@ -2565,7 +2664,7 @@ class App:
             try: nq = max(1, int(qv.get()))
             except ValueError: nq = new_qty
             self.data["parts"][part_idx]["qty"] = nq
-            save_data(self.data)
+            self._save()
             if self._catalog_win and self._catalog_win.win.winfo_exists():
                 self._catalog_win._refresh()
             result[0] = True; dlg.destroy()
@@ -2786,10 +2885,10 @@ class App:
         _qf = ttk.Frame(dlg); _qf.grid(row=r, column=1, columnspan=2, sticky=tk.W, padx=10, pady=4)
         _qv = tk.StringVar(value=str(p.get("qty", 0))); vars_["qty"] = _qv
         ttk.Button(_qf, text="\u2212", width=2, style="Small.TButton",
-                   command=lambda: _qv.set(str(max(0, int(_qv.get())-1)))).pack(side=tk.LEFT, padx=(0,2))
+                   command=lambda: _qv.set(str(max(0, _safe_int(_qv.get())-1)))).pack(side=tk.LEFT, padx=(0,2))
         ttk.Entry(_qf, textvariable=_qv, width=4).pack(side=tk.LEFT)
         ttk.Button(_qf, text="+", width=2, style="Small.TButton",
-                   command=lambda: _qv.set(str(int(_qv.get())+1))).pack(side=tk.LEFT, padx=(2,0))
+                   command=lambda: _qv.set(str(_safe_int(_qv.get())+1))).pack(side=tk.LEFT, padx=(2,0))
         r += 1
         _row(self.t("part_notes"), "notes", _entry, val=p.get("notes",""), w=40)
 
@@ -2812,7 +2911,7 @@ class App:
             if not np["name"]: return
             if is_edit: self.data["parts"][idx] = np
             else: self.data["parts"].append(np)
-            save_data(self.data)
+            self._save()
             if on_done: on_done()
             _close_dlg()
         def _close_dlg():
@@ -3007,7 +3106,10 @@ class App:
             else:
                 ins_idx = be if be >= 0 else len(cfg["stack"])
                 cfg["stack"].insert(ins_idx, part)
-            save_data(self.data); self._refresh_stack(); dlg.destroy()
+                for mk in ("bf_start_idx", "bf_end_idx"):
+                    if cfg.get(mk, -1) >= ins_idx:
+                        cfg[mk] = cfg[mk] + 1
+            self._save(); self._refresh_stack(); dlg.destroy()
         tree.bind("<Double-1>", lambda _: ins())
         bf = ttk.Frame(dlg); bf.pack(pady=10)
         ttk.Button(bf, text=self.t("insert"), command=ins, style="Accent.TButton").pack(side=tk.LEFT, padx=10)
@@ -3124,14 +3226,18 @@ class App:
             # Collect ghost indices in BF zone for replacement
             lo = (bs+1 if bs >= 0 else 0); hi = (be if be >= 0 else len(cfg["stack"]))
             ghosts = [gi for gi in range(lo, hi) if gi < len(cfg["stack"]) and cfg["stack"][gi].get("ghost")]
+            ins_idx = be if be >= 0 else len(cfg["stack"])
             for pi in sol[3]:
                 part = copy.deepcopy(self.data["parts"][pi]); part["flipped"] = False
                 if ghosts:
                     cfg["stack"][ghosts.pop(0)] = part
                 else:
-                    ins_idx = be if be >= 0 else len(cfg["stack"])
                     cfg["stack"].insert(ins_idx, part)
-            save_data(self.data); self._refresh_stack(); dlg.destroy()
+                    for mk in ("bf_start_idx", "bf_end_idx"):
+                        if cfg.get(mk, -1) >= ins_idx:
+                            cfg[mk] = cfg[mk] + 1
+                    ins_idx += 1
+            self._save(); self._refresh_stack(); dlg.destroy()
         rtree.bind("<Double-1>", lambda _: apply_sol())
         bf = ttk.Frame(dlg); bf.pack(pady=10)
         ttk.Button(bf, text=self.t("insert"), command=apply_sol, style="Accent.TButton").pack(side=tk.LEFT, padx=10)
@@ -3146,7 +3252,10 @@ class App:
         path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON","*.json")],
                                             initialfile=cfg["name"]+".json")
         if path:
-            with open(path,"w",encoding="utf-8") as fh: json.dump(cfg, fh, indent=2, ensure_ascii=False)
+            try:
+                with open(path,"w",encoding="utf-8") as fh: json.dump(cfg, fh, indent=2, ensure_ascii=False)
+            except OSError as e:
+                messagebox.showerror("Export Error", str(e))
 
     def _import(self):
         path = filedialog.askopenfilename(filetypes=[("JSON","*.json")])
@@ -3156,16 +3265,19 @@ class App:
             except (json.JSONDecodeError, OSError):
                 messagebox.showerror("Error", "Invalid or unreadable JSON file."); return
             if "name" in cfg and "stack" in cfg:
-                self.data["configurations"].append(cfg); save_data(self.data); self._refresh_cfgs()
+                self.data["configurations"].append(cfg); self._save(); self._refresh_cfgs()
 
     def _export_all(self):
         path = filedialog.asksaveasfilename(defaultextension=".json",
                                             filetypes=[("JSON","*.json")],
                                             initialfile="backfocus_all_data.json")
         if path:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(self.data, fh, indent=2, ensure_ascii=False)
-            messagebox.showinfo(self.t("export_all"), self.t("export_all_ok"))
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(self.data, fh, indent=2, ensure_ascii=False)
+                messagebox.showinfo(self.t("export_all"), self.t("export_all_ok"))
+            except OSError as e:
+                messagebox.showerror("Export Error", str(e))
 
     def _import_all(self):
         if not messagebox.askyesno(self.t("import_all"), self.t("confirm_import_all")):
@@ -3194,7 +3306,7 @@ class App:
     # ── language ──
     def _set_lang(self, lang):
         self.lang = lang; self.data["language"] = lang
-        save_data(self.data); self._apply_language()
+        self._save(); self._apply_language()
 
     def _apply_language(self):
         self.root.title(self.t("app_title"))
@@ -3256,7 +3368,7 @@ class App:
         self._refresh_stack()
 
     def _set_unit(self, key, val):
-        self.data[key] = val; save_data(self.data); self._refresh_stack()
+        self.data[key] = val; self._save(); self._refresh_stack()
         if self._catalog_win and self._catalog_win.win.winfo_exists():
             self._catalog_win._refresh()
 
@@ -3310,19 +3422,21 @@ class App:
     def _update_check_worker_start(self, silent):
         if self._update_thread and self._update_thread.is_alive():
             return
-        self._update_result = None
+        while not self._update_queue.empty():
+            self._update_queue.get_nowait()
         self._update_thread = threading.Thread(target=self._update_check_worker, daemon=True)
         self._update_thread.start()
         self._poll_update_check(silent)
 
     def _update_check_worker(self):
-        self._update_result = _check_for_update()
+        self._update_queue.put(_check_for_update())
 
     def _poll_update_check(self, silent):
-        if self._update_thread and self._update_thread.is_alive():
+        try:
+            result = self._update_queue.get_nowait()
+        except queue.Empty:
             self.root.after(200, lambda: self._poll_update_check(silent))
             return
-        result = self._update_result
         if isinstance(result, dict):
             self._show_update_dialog(result)
         elif not silent:
@@ -3399,7 +3513,8 @@ class App:
         dlg.deiconify()
 
         self._update_dlg = dlg
-        self._update_error = None
+        while not self._update_dl_queue.empty():
+            self._update_dl_queue.get_nowait()
         lbl = tk.Label(dlg, text=self.t("update_downloading"), fg="#e0e0e0",
                        bg="#1a1a2e", font=("Segoe UI", 10))
         lbl.pack(pady=(20, 8))
@@ -3416,30 +3531,38 @@ class App:
     def _update_download_worker(self, url):
         try:
             _download_and_apply_update(url)
+            self._update_dl_queue.put(None)
         except Exception as e:
-            self._update_error = str(e)
+            self._update_dl_queue.put(str(e))
 
     def _poll_update_download(self):
-        if self._update_dl_thread.is_alive():
+        try:
+            error = self._update_dl_queue.get_nowait()
+        except queue.Empty:
             self.root.after(200, self._poll_update_download)
             return
-        if self._update_error:
+        if error:
             self._update_dlg.destroy()
             messagebox.showerror(self.t("help_menu"),
-                                 self.t("update_error", err=self._update_error))
+                                 self.t("update_error", err=error))
         else:
             self._update_lbl.config(text=self.t("update_restarting"))
             self.root.after(600, self._restart_app)
 
     def _restart_app(self):
         save_data(self.data)
+        self.galaxy.stop()
         self.root.destroy()
-        try:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-        except OSError:
-            import subprocess
+        import subprocess
+        if sys.platform == "win32":
             subprocess.Popen([sys.executable] + sys.argv)
             sys.exit(0)
+        else:
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except OSError:
+                subprocess.Popen([sys.executable] + sys.argv)
+                sys.exit(0)
 
     def _restore_sash_positions(self):
         """Restore saved pane sash positions after layout is ready."""
@@ -3471,13 +3594,17 @@ class App:
             pass
 
     def _on_close(self):
-        # Flush any pending debounced save
-        if hasattr(self, '_save_cfg_after') and self._save_cfg_after:
-            self.root.after_cancel(self._save_cfg_after)
-            self._save_cfg_after = None
-        self._save_ui_state()
-        save_data(self.data)
         if messagebox.askyesno(self.t("quit"), self.t("confirm_quit")):
+            # Cancel any pending debounced saves
+            if hasattr(self, '_save_cfg_after') and self._save_cfg_after:
+                self.root.after_cancel(self._save_cfg_after)
+                self._save_cfg_after = None
+            if self._pending_save:
+                self.root.after_cancel(self._pending_save)
+                self._pending_save = None
+            self._save_ui_state()
+            save_data(self.data)
+            self.galaxy.stop()
             self.root.destroy()
 
 
