@@ -76,6 +76,13 @@ Telescope, Refractor, Camera Lens, Astro Camera, DSLR/Mirrorless, Eyepiece, Barl
 - RGB images auto-converted to luminance, large images auto-binned 2x2
 - Threaded analysis with progress bar
 
+### Bug Reports & Crash Capture / Rapports de bugs & Capture de crashs
+- **Automatic crash capture**: all unhandled exceptions are logged locally with full traceback
+- **Crash detection on restart**: detects previous crash and offers to open a pre-filled GitHub Issue
+- **Manual bug report** (Help menu): opens browser with system info and recent errors pre-filled
+- **Local error log**: persistent log with automatic rotation (100 KB max)
+- **Zero data sent automatically**: you always review and submit the report yourself
+
 ### Dark Space Theme / Thème spatial
 - Dark space/cosmos theme with color accents
 - Color-coded part types in the diagram

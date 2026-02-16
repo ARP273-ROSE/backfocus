@@ -207,6 +207,15 @@ TR = {
     "update_error":      {"en": "Update failed: {err}", "fr": "Échec de la mise à jour : {err}"},
     "update_up_to_date": {"en": "You are up to date (v{version}).", "fr": "Vous êtes à jour (v{version})."},
     "update_no_connection":{"en": "Could not reach GitHub.\nCheck your internet connection.", "fr": "Impossible de joindre GitHub.\nVérifiez votre connexion internet."},
+    # ── crash report ──
+    "crash_detected":    {"en": "Crash Detected", "fr": "Crash détecté"},
+    "crash_report_msg":  {"en": "The application crashed during the last session.\n\nWould you like to send an anonymous bug report?",
+                          "fr": "L'application a planté lors de la dernière session.\n\nVoulez-vous envoyer un rapport de bug anonyme ?"},
+    "crash_report_send": {"en": "Send Report", "fr": "Envoyer le rapport"},
+    "crash_report_skip": {"en": "Skip", "fr": "Ignorer"},
+    "crash_report_sent": {"en": "Bug report opened in your browser.\nPlease click 'Submit' to send it.",
+                          "fr": "Rapport de bug ouvert dans votre navigateur.\nCliquez sur 'Submit' pour l'envoyer."},
+    "error_log":         {"en": "Error Log", "fr": "Journal d'erreurs"},
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -240,6 +249,8 @@ BF_ROLE_END_TYPES   = {"type_camera", "type_dslr", "type_eyepiece"}
 DIAMETERS = ["All"] + sorted(["M42", "M48", "M52", "M54", "M68", "M72", "M81", "SC", "T2", "EOS"])
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backfocus_data.json")
+_CRASH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_crash_report.json")
+_ERROR_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backfocus_errors.log")
 
 # ── Reference DB ──
 try:
@@ -561,6 +572,69 @@ def _safe_int(s, default=0):
         return default
 
 # ═══════════════════════════════════════════════════════════════════
+#  ERROR LOGGING & CRASH CAPTURE
+# ═══════════════════════════════════════════════════════════════════
+_MAX_ERROR_LOG_BYTES = 100 * 1024  # 100 KB
+
+def _log_error(msg):
+    """Append a timestamped line to the error log. Never raises."""
+    try:
+        from datetime import datetime
+        line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n"
+        # Rotation: if log exceeds limit, keep last half
+        if os.path.exists(_ERROR_LOG):
+            try:
+                sz = os.path.getsize(_ERROR_LOG)
+                if sz > _MAX_ERROR_LOG_BYTES:
+                    with open(_ERROR_LOG, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    lines = content.splitlines(True)
+                    half = len(lines) // 2
+                    with open(_ERROR_LOG, "w", encoding="utf-8") as f:
+                        f.writelines(lines[half:])
+            except OSError:
+                pass
+        with open(_ERROR_LOG, "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+def _global_exception_handler(exc_type, exc_value, exc_tb):
+    """sys.excepthook replacement — logs crash and saves report file."""
+    import traceback
+    from datetime import datetime
+    tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    _log_error(f"CRASH: {exc_type.__name__}: {exc_value}\n{tb_str}")
+    try:
+        crash = {
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "version": VERSION,
+            "os": f"{_platform.system()} {_platform.version()}",
+            "python": _platform.python_version(),
+            "arch": _platform.machine(),
+            "tk": str(tk.TkVersion),
+            "error_type": exc_type.__name__,
+            "error_msg": str(exc_value),
+            "traceback": tb_str,
+        }
+        with open(_CRASH_FILE, "w", encoding="utf-8") as f:
+            json.dump(crash, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+def _get_recent_errors(n=10):
+    """Return the last n lines from the error log, or empty string."""
+    try:
+        if not os.path.exists(_ERROR_LOG):
+            return ""
+        with open(_ERROR_LOG, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        return "".join(lines[-n:]).strip()
+    except OSError:
+        return ""
+
+# ═══════════════════════════════════════════════════════════════════
 #  TOOLTIP
 # ═══════════════════════════════════════════════════════════════════
 class Tooltip:
@@ -859,6 +933,19 @@ def open_help(parent, lang="en"):
         b("Allongement tangentiel (\u00e9toiles en tourbillon) \u2192 backfocus trop long.")
         b("Note : l\u2019analyse mono-image donne la direction, pas l\u2019\u00e9cart pr\u00e9cis en mm.")
 
+        h("14. Rapports de bugs et capture de crashs","h2")
+        p("L\u2019application capture automatiquement les erreurs non g\u00e9r\u00e9es (crashs) et vous aide \u00e0 signaler les probl\u00e8mes.")
+        h("Capture automatique","h3")
+        b("Toute exception non g\u00e9r\u00e9e est enregistr\u00e9e dans un journal local (backfocus_errors.log).")
+        b("Un fichier de rapport (_crash_report.json) est cr\u00e9\u00e9 avec le traceback et les infos syst\u00e8me.")
+        b("Le journal est automatiquement tronqu\u00e9 s\u2019il d\u00e9passe 100 Ko.")
+        h("D\u00e9tection au red\u00e9marrage","h3")
+        b("Au prochain lancement, l\u2019appli d\u00e9tecte le crash et propose d\u2019envoyer un rapport.")
+        b("\u00ab Envoyer \u00bb ouvre le navigateur avec une Issue GitHub pr\u00e9-remplie.")
+        b("\u00ab Ignorer \u00bb supprime le rapport. Aucune donn\u00e9e n\u2019est envoy\u00e9e automatiquement.")
+        h("Rapport manuel","h3")
+        b("Menu Aide > Signaler un bug : ouvre un formulaire pr\u00e9-rempli avec les infos syst\u00e8me et les erreurs r\u00e9centes.")
+
     else:
         h(f"Backfocus Calculator v{VERSION} \u2014 Complete Guide")
         p("Welcome! This application helps you design and verify optical trains for astrophotography. Dark space theme, galaxy cursor, 12,000+ real product database.")
@@ -997,6 +1084,19 @@ def open_help(parent, lang="en"):
         b("Radial elongation (stars pointing toward the edge) \u2192 backfocus too short.")
         b("Tangential elongation (swirl pattern) \u2192 backfocus too long.")
         b("Note: single-image analysis gives direction only, not a precise offset in mm.")
+
+        h("14. Bug Reports & Crash Capture","h2")
+        p("The application automatically captures unhandled errors (crashes) and helps you report issues.")
+        h("Automatic Capture","h3")
+        b("Any unhandled exception is logged to a local file (backfocus_errors.log).")
+        b("A crash report file (_crash_report.json) is created with the traceback and system info.")
+        b("The error log is automatically truncated if it exceeds 100 KB.")
+        h("Detection on Restart","h3")
+        b("On next launch, the app detects the crash and offers to send a report.")
+        b("'Send Report' opens your browser with a pre-filled GitHub Issue.")
+        b("'Skip' deletes the report. No data is sent automatically.")
+        h("Manual Report","h3")
+        b("Help > Report Bug: opens a pre-filled form with system info and recent errors.")
     txt.configure(state="disabled")
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1409,6 +1509,7 @@ class App:
         self._update_queue = queue.Queue()
         self._update_dl_queue = queue.Queue()
         self.root.after(2000, self._check_updates_startup)
+        self.root.after(3000, self._check_crash_on_startup)
 
     def _save(self):
         """Debounced save — coalesces rapid save_data calls into one write."""
@@ -3381,6 +3482,109 @@ class App:
             "Dark space theme \u00b7 Galaxy cursor\n"
             "Bilingual EN/FR")
 
+    # ── crash detection ─────────────────────────────────────────────
+
+    def _check_crash_on_startup(self):
+        """If a crash report file exists, offer to send it."""
+        if not os.path.exists(_CRASH_FILE):
+            return
+        try:
+            with open(_CRASH_FILE, "r", encoding="utf-8") as f:
+                crash_data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            try:
+                os.remove(_CRASH_FILE)
+            except OSError:
+                pass
+            return
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title(self.t("crash_detected"))
+        dlg.configure(bg=C["bg_dark"])
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        w, h = 440, 200
+        dlg.withdraw()
+        dlg.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dlg.geometry(f"{w}x{h}+{x}+{y}")
+        dlg.deiconify()
+
+        tk.Label(dlg, text=self.t("crash_detected"),
+                 font=(FONT_FAMILY, 13, "bold"),
+                 fg=C["accent_red"], bg=C["bg_dark"]).pack(pady=(16, 4))
+        tk.Label(dlg, text=self.t("crash_report_msg"),
+                 font=(FONT_FAMILY, 10), fg=C["fg_main"], bg=C["bg_dark"],
+                 wraplength=400, justify="center").pack(pady=(4, 16))
+
+        btn_frame = tk.Frame(dlg, bg=C["bg_dark"])
+        btn_frame.pack(pady=(0, 12))
+
+        def _send():
+            dlg.destroy()
+            self._send_crash_report(crash_data)
+
+        def _skip():
+            dlg.destroy()
+
+        tk.Button(btn_frame, text=self.t("crash_report_send"),
+                  font=(FONT_FAMILY, 10, "bold"), fg=C["fg_bright"], bg=C["accent_red"],
+                  activebackground=C["accent_orange"], width=16,
+                  command=_send).pack(side="left", padx=8)
+        tk.Button(btn_frame, text=self.t("crash_report_skip"),
+                  font=(FONT_FAMILY, 10), fg=C["fg_main"], bg=C["btn_bg"],
+                  activebackground=C["btn_hover"], width=12,
+                  command=_skip).pack(side="left", padx=8)
+
+        _bind_dlg_keys(dlg)
+
+        # Always remove crash file after handling
+        try:
+            os.remove(_CRASH_FILE)
+        except OSError:
+            pass
+
+    def _send_crash_report(self, crash_data):
+        """Open browser with a pre-filled GitHub Issue from crash data."""
+        import urllib.parse, webbrowser
+        error_type = crash_data.get("error_type", "Unknown")
+        error_msg = crash_data.get("error_msg", "")
+        tb = crash_data.get("traceback", "")
+        title = f"[Crash] {error_type}: {error_msg}"
+        if len(title) > 120:
+            title = title[:117] + "..."
+
+        recent = _get_recent_errors(10)
+        recent_section = ""
+        if recent:
+            recent_section = f"## Recent Errors\n\n```\n{recent}\n```\n\n"
+
+        body = (
+            f"## Crash Report\n\n"
+            f"**{error_type}:** {error_msg}\n\n"
+            f"### Traceback\n\n```\n{tb}```\n\n"
+            f"### System Info\n\n"
+            f"- **Backfocus Calculator:** v{crash_data.get('version', '?')}\n"
+            f"- **OS:** {crash_data.get('os', '?')}\n"
+            f"- **Python:** {crash_data.get('python', '?')}\n"
+            f"- **Architecture:** {crash_data.get('arch', '?')}\n"
+            f"- **Tk:** {crash_data.get('tk', '?')}\n\n"
+            f"{recent_section}"
+            f"*Auto-generated crash report*\n"
+        )
+        params = urllib.parse.urlencode({
+            'title': title,
+            'body': body,
+            'labels': 'auto-report,bug',
+        })
+        webbrowser.open(f"https://github.com/ARP273-ROSE/backfocus/issues/new?{params}")
+        messagebox.showinfo(self.t("crash_detected"), self.t("crash_report_sent"))
+
+    # ── bug report ───────────────────────────────────────────────────
+
     def _report_bug(self):
         import platform, urllib.parse, webbrowser
         sys_info = (
@@ -3390,6 +3594,10 @@ class App:
             f"- **Architecture:** {platform.machine()}\n"
             f"- **Tk:** {tk.TkVersion}\n"
         )
+        recent = _get_recent_errors(10)
+        recent_section = ""
+        if recent:
+            recent_section = f"## Recent Errors\n\n```\n{recent}\n```\n\n"
         body = (
             "## Description\n\n"
             "<!-- Describe the bug clearly -->\n\n\n"
@@ -3399,6 +3607,7 @@ class App:
             "## Actual Behavior\n\n\n\n"
             "## System Info\n\n"
             f"{sys_info}\n"
+            f"{recent_section}"
             "## Screenshots / Logs\n\n"
             "<!-- Paste any relevant screenshots or log output -->\n"
         )
@@ -3612,6 +3821,7 @@ class App:
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════
 def main():
+    sys.excepthook = _global_exception_handler
     if sys.platform == "win32":
         try:
             import ctypes
