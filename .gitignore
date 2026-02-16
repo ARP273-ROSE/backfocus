@@ -29,5 +29,10 @@ backfocus_errors.log
 # AI context (local only)
 CLAUDE.md
 
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
 # Windows temp artifacts
 NDH6SA~M
