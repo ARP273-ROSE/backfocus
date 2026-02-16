@@ -22,6 +22,10 @@ manual/*.toc
 # Personal files
 *.xlsx
 
+# Crash / error logs (local only)
+_crash_report.json
+backfocus_errors.log
+
 # AI context (local only)
 CLAUDE.md
 
