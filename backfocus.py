@@ -5,6 +5,16 @@ Dark space/cosmos theme · 12 000+ reference DB · Galaxy cursor.
 Light convention: Telescope (left) → Camera (right).
 """
 
+# Windows: set AppUserModelID before any GUI import so taskbar uses our icon
+import sys
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "ARP273.BackfocusCalculator.1")
+    except (AttributeError, OSError):
+        pass
+
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import json, os, sys, copy, itertools, math, random, bisect, threading, queue
@@ -670,11 +680,15 @@ class Tooltip:
 # ═══════════════════════════════════════════════════════════════════
 class GalaxyCursor:
     SIZE = 22
-    POLL_MS = 32   # ~30 fps — smooth enough for a cursor follower
+    POLL_MS = 16   # ~60 fps for smooth cursor following
+    OFFSET = 20    # distance from pointer so galaxy doesn't overlap cursor
+    LERP = 0.35    # interpolation factor (0=frozen, 1=instant, 0.35=smooth trail)
     def __init__(self, root):
         self.root = root
         self._paused = False
         self._stopped = False
+        self._cur_x = 0.0   # current rendered position (float for smooth lerp)
+        self._cur_y = 0.0
         self.win = tk.Toplevel(root); self.win.overrideredirect(True)
         try: self.win.attributes("-topmost", True)
         except tk.TclError: pass
@@ -759,9 +773,13 @@ class GalaxyCursor:
             return
         if not self._paused:
             try:
-                x = self.root.winfo_pointerx()+10
-                y = self.root.winfo_pointery()+10
-                self.win.geometry(f"+{x}+{y}"); self.win.lift()
+                tx = self.root.winfo_pointerx() + self.OFFSET
+                ty = self.root.winfo_pointery() + self.OFFSET
+                # Smooth interpolation toward target
+                self._cur_x += (tx - self._cur_x) * self.LERP
+                self._cur_y += (ty - self._cur_y) * self.LERP
+                ix, iy = int(self._cur_x), int(self._cur_y)
+                self.win.geometry(f"+{ix}+{iy}")
             except Exception:
                 pass
         try:
@@ -1585,10 +1603,10 @@ class App:
                     foreground=C["accent_purple"], padding=(4,6))
         s.configure("Section.TLabel", font=(FONT_FAMILY,9,"bold"),
                     foreground=C["accent_teal"], padding=(2,4))
-        s.configure("Result.TLabel", font=(FONT_FAMILY,11,"bold"),
-                    foreground=C["fg_bright"], padding=(4,4))
-        s.configure("Big.TLabel", font=(FONT_FAMILY,14,"bold"), padding=(4,4))
-        s.configure("Calc.TLabel", font=(FONT_FAMILY,10), padding=(2,2))
+        s.configure("Result.TLabel", font=(FONT_FAMILY,9,"bold"),
+                    foreground=C["fg_bright"], padding=(3,3))
+        s.configure("Big.TLabel", font=(FONT_FAMILY,11,"bold"), padding=(3,3))
+        s.configure("Calc.TLabel", font=(FONT_FAMILY,9), padding=(2,2))
 
         # ── buttons: rounded pill background ──
         s.layout("TButton", [
@@ -1700,8 +1718,17 @@ class App:
     def _build_ui(self):
         self.root.title(self.t("app_title"))
         ui = self.data.get("ui", {})
-        geo = ui.get("window_geometry", "1400x920")
-        self.root.geometry(geo); self.root.minsize(1050,740)
+        geo = ui.get("window_geometry", "1400x1100")
+        # Ensure saved geometry isn't too short for current DPI
+        try:
+            dims = geo.split("+")[0]
+            gw, gh = (int(v) for v in dims.split("x"))
+            if gh < 1100:
+                gh = 1100
+                geo = f"{gw}x{gh}" + ("+" + "+".join(geo.split("+")[1:])) if "+" in geo else f"{gw}x{gh}"
+        except (ValueError, IndexError):
+            pass
+        self.root.geometry(geo); self.root.minsize(1050,1100)
         self.menu = tk.Menu(self.root, bg=C["menu_bg"], fg=C["fg_main"],
                             activebackground=C["bg_selected"], activeforeground=C["fg_bright"],
                             bd=0, relief="flat")
@@ -3061,19 +3088,18 @@ class App:
         return c.create_polygon(pts, smooth=True, **kw)
 
     def _on_root_configure(self, event):
-        """Pause expensive work during window resize."""
+        """Debounce diagram redraw during window resize."""
         if event.widget is not self.root:
             return
-        # Pause galaxy cursor overlay during resize
-        self.galaxy.pause()
         if self._win_resize_after:
             self.root.after_cancel(self._win_resize_after)
-        self._win_resize_after = self.root.after(200, self._on_resize_done)
+        self._win_resize_after = self.root.after(60, self._on_resize_done)
 
     def _on_resize_done(self):
-        """Resume normal operation after window resize ends."""
+        """Redraw diagram after resize settles."""
         self._win_resize_after = None
-        self.galaxy.resume()
+        if self._last_draw_args:
+            self._redraw_from_cache()
 
     def _on_canvas_resize(self, event):
         """Redraw diagram when canvas is resized."""
@@ -3086,7 +3112,7 @@ class App:
         # Debounce: cancel pending redraw, schedule a new one
         if self._resize_after_id:
             self.canvas.after_cancel(self._resize_after_id)
-        self._resize_after_id = self.canvas.after(80, self._redraw_from_cache)
+        self._resize_after_id = self.canvas.after(60, self._redraw_from_cache)
 
     def _redraw_from_cache(self):
         """Redraw using cached arguments."""
@@ -3501,27 +3527,21 @@ class App:
         dlg = tk.Toplevel(self.root)
         dlg.title(self.t("crash_detected"))
         dlg.configure(bg=C["bg_dark"])
-        dlg.resizable(False, False)
         dlg.transient(self.root)
         dlg.grab_set()
 
-        w, h = 440, 200
+        # Build content first, then size to fit
         dlg.withdraw()
-        dlg.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
-        dlg.geometry(f"{w}x{h}+{x}+{y}")
-        dlg.deiconify()
 
         tk.Label(dlg, text=self.t("crash_detected"),
-                 font=(FONT_FAMILY, 13, "bold"),
-                 fg=C["accent_red"], bg=C["bg_dark"]).pack(pady=(16, 4))
+                 font=(FONT_FAMILY, 15, "bold"),
+                 fg=C["accent_red"], bg=C["bg_dark"]).pack(pady=(24, 10))
         tk.Label(dlg, text=self.t("crash_report_msg"),
-                 font=(FONT_FAMILY, 10), fg=C["fg_main"], bg=C["bg_dark"],
-                 wraplength=400, justify="center").pack(pady=(4, 16))
+                 font=(FONT_FAMILY, 11), fg=C["fg_main"], bg=C["bg_dark"],
+                 wraplength=460, justify="center").pack(padx=30, pady=(4, 28))
 
         btn_frame = tk.Frame(dlg, bg=C["bg_dark"])
-        btn_frame.pack(pady=(0, 12))
+        btn_frame.pack(pady=(0, 24))
 
         def _send():
             dlg.destroy()
@@ -3531,13 +3551,18 @@ class App:
             dlg.destroy()
 
         tk.Button(btn_frame, text=self.t("crash_report_send"),
-                  font=(FONT_FAMILY, 10, "bold"), fg=C["fg_bright"], bg=C["accent_red"],
-                  activebackground=C["accent_orange"], width=16,
-                  command=_send).pack(side="left", padx=8)
+                  font=(FONT_FAMILY, 11, "bold"), fg=C["fg_bright"], bg=C["accent_red"],
+                  activebackground=C["accent_orange"], width=18, pady=6,
+                  command=_send).pack(side="left", padx=12)
         tk.Button(btn_frame, text=self.t("crash_report_skip"),
-                  font=(FONT_FAMILY, 10), fg=C["fg_main"], bg=C["btn_bg"],
-                  activebackground=C["btn_hover"], width=12,
-                  command=_skip).pack(side="left", padx=8)
+                  font=(FONT_FAMILY, 11), fg=C["fg_main"], bg=C["btn_bg"],
+                  activebackground=C["btn_hover"], width=14, pady=6,
+                  command=_skip).pack(side="left", padx=12)
+
+        # Let tkinter compute the required size, then center on parent
+        dlg.update_idletasks()
+        _center_dlg(dlg, self.root)
+        dlg.resizable(False, False)
 
         _bind_dlg_keys(dlg)
 
@@ -3803,18 +3828,17 @@ class App:
             pass
 
     def _on_close(self):
-        if messagebox.askyesno(self.t("quit"), self.t("confirm_quit")):
-            # Cancel any pending debounced saves
-            if hasattr(self, '_save_cfg_after') and self._save_cfg_after:
-                self.root.after_cancel(self._save_cfg_after)
-                self._save_cfg_after = None
-            if self._pending_save:
-                self.root.after_cancel(self._pending_save)
-                self._pending_save = None
-            self._save_ui_state()
-            save_data(self.data)
-            self.galaxy.stop()
-            self.root.destroy()
+        # Cancel any pending debounced saves
+        if hasattr(self, '_save_cfg_after') and self._save_cfg_after:
+            self.root.after_cancel(self._save_cfg_after)
+            self._save_cfg_after = None
+        if self._pending_save:
+            self.root.after_cancel(self._pending_save)
+            self._pending_save = None
+        self._save_ui_state()
+        save_data(self.data)
+        self.galaxy.stop()
+        self.root.destroy()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -3835,6 +3859,15 @@ def main():
                 except (AttributeError, OSError):
                     pass
     root = tk.Tk()
+    # App icon (title bar + taskbar)
+    _icon_dir = os.path.dirname(os.path.abspath(__file__))
+    _png_path = os.path.join(_icon_dir, "backfocus.png")
+    try:
+        if os.path.exists(_png_path):
+            _icon_img = tk.PhotoImage(file=_png_path)
+            root.iconphoto(True, _icon_img)
+    except tk.TclError:
+        pass
     App(root)
     root.lift()
     root.attributes("-topmost", True)
