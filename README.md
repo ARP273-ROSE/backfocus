@@ -132,6 +132,23 @@ The launcher script will:
 4. Install FITS analyzer dependencies from requirements.txt
 5. Launch the application
 
+### Windows Standalone (.exe) — No Python Required
+
+A pre-built Windows executable is available on the [Releases](https://github.com/ARP273-ROSE/backfocus/releases) page:
+
+1. Download the latest `BackfocusCalculator-vX.X.X.zip` from Releases
+2. Extract the archive
+3. Run `BackfocusCalculator.exe` — no Python installation needed
+
+To build the executable yourself:
+```bash
+pip install pyinstaller
+pyinstaller backfocus.spec
+```
+The output is in `dist/BackfocusCalculator/`. All features work identically (auto-save, export/import, FITS analyzer, auto-update check, etc.).
+
+> **Note**: The standalone exe is Windows-only. On Linux/macOS, use the launcher scripts above.
+
 ### Manual Launch / Lancement direct
 ```bash
 python backfocus.py
@@ -216,6 +233,9 @@ backfocus/
 ├── launch.sh              # Linux/macOS launcher (auto-setup)
 ├── fits_analyzer.py       # FITS/XISF backfocus analyzer (optional)
 ├── requirements.txt       # Python dependencies for FITS analyzer
+├── backfocus.spec         # PyInstaller build spec (Windows .exe)
+├── backfocus.ico          # Application icon (Windows)
+├── backfocus.png          # Application icon (cross-platform)
 ├── README.md              # This file
 └── manual/
     └── manual.pdf         # Bilingual user manual
