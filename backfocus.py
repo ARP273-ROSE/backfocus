@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import json, os, sys, copy, itertools, math, random, bisect, threading, queue
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # ═══════════════════════════════════════════════════════════════════
 #  TRANSLATIONS
