@@ -88,6 +88,15 @@ if %ERRORLEVEL% neq 0 (
 echo [OK] tkinter available
 
 :: --- Create virtual environment if needed ---
+if exist "%SCRIPT_DIR%venv\Scripts\python.exe" (
+    :: Verify the existing venv actually works (not broken by removed Python)
+    "%SCRIPT_DIR%venv\Scripts\python.exe" -c "import sys; sys.exit(0)" >nul 2>&1
+    if !ERRORLEVEL! neq 0 (
+        echo [!] Broken virtual environment ^(base Python removed^). Recreating...
+        rmdir /s /q "%SCRIPT_DIR%venv" >nul 2>&1
+    )
+)
+
 if not exist "%SCRIPT_DIR%venv" (
     echo.
     echo Creating virtual environment...

@@ -57,6 +57,14 @@ fi
 echo "[OK] tkinter available"
 
 # --- Virtual environment ---
+if [ -f "$SCRIPT_DIR/venv/bin/python" ]; then
+    # Verify the existing venv actually works (not broken by removed Python)
+    if ! "$SCRIPT_DIR/venv/bin/python" -c "import sys; sys.exit(0)" &>/dev/null; then
+        echo "[!] Broken virtual environment (base Python removed). Recreating..."
+        rm -rf "$SCRIPT_DIR/venv"
+    fi
+fi
+
 if [ ! -d "$SCRIPT_DIR/venv" ]; then
     echo ""
     echo "Creating virtual environment..."
