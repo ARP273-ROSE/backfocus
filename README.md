@@ -1,4 +1,4 @@
-# Backfocus Calculator v1
+# Backfocus Calculator v1.4
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -82,6 +82,14 @@ Telescope, Refractor, Camera Lens, Astro Camera, DSLR/Mirrorless, Eyepiece, Barl
 - **Manual bug report** (Help menu): opens browser with system info and recent errors pre-filled
 - **Local error log**: persistent log with automatic rotation (100 KB max)
 - **Zero data sent automatically**: you always review and submit the report yourself
+
+### Performance & Fluidity (v1.4) / Performance & Fluidité (v1.4)
+- **Async save**: file I/O offloaded to a dedicated daemon thread — eliminates 50–200 ms UI micro-freezes
+- **Galaxy cursor optimized**: 30 fps polling with early-out when position unchanged (~50% fewer Tcl calls)
+- **Fast qty +/−**: single-row update instead of full catalog rebuild on each click
+- **Batch Treeview insert**: columns hidden during insertion, single repaint instead of one per item
+- **Parts search cache**: pre-built index for 12,000+ parts, invalidated on data change
+- **Unified debounce**: single 300 ms save timer for all operations
 
 ### Dark Space Theme / Thème spatial
 - Dark space/cosmos theme with color accents

@@ -26,6 +26,9 @@ manual/*.toc
 _crash_report.json
 backfocus_errors.log
 
+# Progress tracking (local only)
+_progress.json
+
 # AI context (local only)
 CLAUDE.md
 
