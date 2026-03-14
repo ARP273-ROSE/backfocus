@@ -1,7 +1,8 @@
 # Backfocus Calculator
 # Python 3.8+ required
+# PyQt6 is required for the main application.
+PyQt6>=6.4
 # These dependencies are needed for the FITS Backfocus Analyzer feature.
-# The main application works without them (tkinter only).
 numpy>=1.20
 scipy>=1.7
 astropy>=5.0
