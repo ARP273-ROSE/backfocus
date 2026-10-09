@@ -41,7 +41,8 @@ def fichiers_du_depot():
     try:
         r = subprocess.run(['git', 'ls-files', '-z'], cwd=RACINE, capture_output=True, timeout=30)
         if r.returncode == 0 and r.stdout:
-            return [RACINE / f for f in r.stdout.decode('utf-8').split('\0') if f]
+            return [RACINE / f for f in r.stdout.decode('utf-8').split('\0')
+                    if f and '__pycache__' not in f and not f.endswith('.pyc')]
     except (OSError, subprocess.SubprocessError):
         pass
     out = []
